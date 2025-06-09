@@ -1,0 +1,6 @@
+{
+  "name": "ДВАЧБОТ РАБОЧИЙ",
+  "description": "A Vite-based React application to interact with 2ch.hk, styled with Tailwind CSS, and deployable on Vercel.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}

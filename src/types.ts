@@ -1,0 +1,238 @@
+/// <reference types="vite/client" />
+import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, Candidate } from "@google/genai"; // GeminiChat renamed to GeminiChatInstanceType
+
+// Dvach API Types (aligned with OpenAPI spec where possible)
+export interface DvachFile {
+  name: string; // displayname from API
+  fullname?: string; // fullname from API
+  path: string; // Relative path to file on server
+  thumbnail: string; // Relative path to thumbnail
+  md5?: string;
+  type: number; // FileType enum from API (0: none, 1: jpg, 2: png, 6: webm, 10: mp4 etc.)
+  size: number; // Size in KB from API in spec, but often in bytes in practice. Be mindful.
+  width: number;
+  height: number;
+  tn_width: number;
+  tn_height: number;
+  duration?: string; // e.g., "00:00:53"
+  duration_secs?: number;
+  nsfw?: number; // 0 or 1 usually
+  sticker?: string; // Sticker ID if type is 100
+  pack?: string; // Sticker pack ID
+  install?: string; // Sticker install link
+}
+
+export interface DvachPost {
+  num: string; // Post number, always treat as string
+  parent: string; // Thread number (OP post num), or "0" for OP itself, always treat as string
+  board?: string; // Board ID, useful when posts are out of thread context
+  timestamp: number; // Unix timestamp
+  lasthit?: number; // Unix timestamp of last bump
+  date?: string; // Formatted date string from API
+  email?: string; // mailto:sage or actual email
+  subject?: string;
+  comment: string; // HTML comment
+  files?: DvachFile[];
+  views?: number;
+  sticky?: number; // 0 or 1+
+  closed?: number; // 0 or 1
+  banned?: number; // 0 or 1
+  op?: number; // 0 or 1
+  name?: string; // Poster name
+  trip?: string;
+  trip_style?: string; // For admin/mod trips
+  icon?: string; // HTML string for flag/icon
+  tags?: string; // Comma-separated or single tag
+  likes?: number;
+  dislikes?: number;
+  posts_count?: number; // For OP post in catalog/threads list
+  files_count?: number; // For OP post in catalog/threads list
+  score?: number; // For threads.json
+  number?: number; // For posts within a thread response, usually indicates order.
+}
+
+// Response for /{board}/res/{thread_id}.json
+export interface DvachThreadResponse {
+  board?: string; // Board ID
+  current_thread: string; // Thread ID (OP post number)
+  max_num?: string; // Max post number in thread
+  posts_count?: number; // Total posts in thread
+  files_count?: number; // Total files in thread
+  unique_posters?: number;
+  is_closed?: number; // 0 or 1
+  title?: string; // Thread title (from OP subject)
+  thread_first_image?: string; // path to first image of OP
+  is_board?: boolean; // false
+  is_index?: boolean; // false
+  file_prefix?: string; // for old archived threads
+  threads: Array<{ // Dvach wraps posts in a threads array, even for a single thread response
+    posts: DvachPost[];
+  }>;
+  // May include BoardBanner fields directly too.
+  advert_top_image?: string;
+  advert_top_link?: string;
+  advert_bottom_image?: string;
+  advert_bottom_link?: string;
+  advert_mobile_image?: string;
+  advert_mobile_link?: string;
+  board_banner_image?: string;
+  board_banner_link?: string;
+}
+
+// For API responses from /api/dvach-post and /api/dvach-login
+export interface DvachPostApiResponse { // Also used for login response structure where applicable
+  result: number; // 0 for error, 1 for success
+  reason?: string; // Error message from Dvach (makaba.md style)
+  Error?: string; // Alternative error message (makaba.md style, less common now)
+  error?: { code: number; message: string; }; // OpenAPI style error
+  num?: string; // New post number (for replies), ensure string
+  thread?: string; // New thread number (for new threads), ensure string
+  target?: string; // Alternative for new thread number, ensure string
+  status?: string; // Can be "OK" (old API for /user/passlogout)
+  // For login success specifically:
+  message?: string; // e.g., "Dvach login successful."
+  passcode_auth_cookie_value?: string;
+  user_code_cookie_value?: string;
+  [key: string]: any; // Allow other potential fields
+}
+
+
+// For API errors (parsed from DvachPostApiResponse or other error scenarios)
+export interface DvachApiError {
+  code: number; // Dvach specific error code (e.g., -19) or HTTP status
+  message: string;
+}
+
+
+// Application Specific Types
+export interface SentMessageInfo {
+  num: string; // Post number of the sent message
+  timestamp: number;
+  comment: string;
+  board: string;
+  thread: string; // Thread ID (OP post number) this message belongs to
+  parent?: string; // Post number this message replied to, if any
+  file_info?: { name: string; size: number; hash?: string }; // Info about attached file
+  isGeminiPost?: boolean;
+  geminiTriggerPostNum?: string; // If Gemini replied to a specific post
+  geminiGeneratedImage?: boolean; // If Gemini generated an image for this post
+  geminiConversationId?: string; // To link to a specific GeminiDvachConversation
+}
+
+export type ProxyModeForGET = 
+  | 'vercel_serverless' 
+  | 'custom_go_x2u' 
+  | 'custom_cors_anywhere' 
+  | 'custom_general_prefix' 
+  | 'custom_general_param' 
+  | 'none';
+
+export interface DvachSessionCookies {
+  passcode_auth: string | null;
+  usercode: string | null; // Dvach also sets a 'usercode' cookie
+}
+
+export interface AppSettings {
+  board: string;
+  threadId: string; // Current thread ID user is interacting with
+  purchasedPasscode: string; // This is the user's long-term purchased passcode string.
+  
+  geminiApiKeySource: 'env' | 'user';
+  userGeminiApiKey: string;
+  
+  theme: 'light' | 'dark' | 'system';
+  
+  proxyModeForGET: ProxyModeForGET; 
+  customProxyUrlForGET: string; 
+  userAgent: string; // User agent for client-side GETs and to pass to serverless
+
+  // Gemini specific settings for Dvach interaction
+  geminiAnalyzeOpMedia: boolean; // Whether Gemini should consider media in OP post
+  geminiAnalyzeAnonMedia: boolean; // Whether Gemini should consider media in non-OP posts
+  geminiReplyWithGeneratedImage: boolean; // Whether Gemini should attempt to generate an image with its reply
+  autoMonitorDvachThreadForGemini: boolean; // Whether Gemini should auto-monitor and reply in threads
+
+  // Gemini Model Configuration
+  geminiSystemInstruction: string;
+  geminiTemperature: number;
+  geminiTopP: number;
+  geminiTopK: number;
+  geminiMaxOutputTokens: number;
+  geminiResponseMimeType: 'text/plain' | 'application/json'; // For generic Gemini text generation
+  useSearchGrounding: boolean; // For generic Gemini text generation
+  useThinkingBudget: boolean; // If false, thinkingBudget is 0
+  geminiThinkingBudget: number; // In milliseconds, 0 disables it
+
+  // Repetitive Posting Mode (Advanced/Botting Feature)
+  enableRepetitivePostingMode: boolean;
+  repetitivePostMessage: string;
+  repetitivePostCount: number; // How many times to post
+  repetitivePostDelay: number; // Delay in seconds between posts
+
+  // Pre-filled Posting Mode (Advanced/Botting Feature)
+  enablePrefilledPostingMode: boolean;
+  prefilledPostMessages: string; // Newline-separated messages
+  prefilledPostTargets: string; // Newline-separated target post numbers (optional)
+}
+
+export interface LogEntry {
+  id: string;
+  timestamp: number;
+  message: string;
+  type: 'info' | 'error' | 'success' | 'warning' | 'gemini' | 'dvach' | 'system' | 'auth';
+  data?: unknown; // For structured error data or additional info
+}
+
+export interface ChatMessage { // For standalone Gemini chat UI AND GeminiDvachConversation history
+  id: string; // Unique ID for React key
+  role: 'user' | 'model' | 'system'; // 'system' for initial prompt or errors from system
+  parts: Part[]; // Using Gemini's Part type
+  timestamp: number;
+  imagePreview?: string; // base64 data URL for displaying sent/received images in chat UI
+  isLoading?: boolean; // True if this is a model message currently being streamed
+}
+
+export type GeminiChat = GeminiChatInstanceType; // Type alias for clarity (Gemini's Chat instance)
+
+export interface GeneratedImage { // For images generated by Gemini
+  base64Data: string; // Base64 encoded image string
+  mimeType: string;   // e.g., 'image/jpeg', 'image/png'
+  prompt?: string;     // The prompt used to generate this image (optional)
+}
+
+export interface GroundingChunk { // From Gemini SDK (for search grounding results)
+  web?: { uri?: string; title?: string; };
+  retrievedContext?: { uri?: string; title?: string; };
+}
+export interface GroundingMetadata { // From Gemini SDK
+  webSearchQueries?: string[];
+  groundingChunks?: GroundingChunk[];
+}
+
+// Extends Gemini's response to potentially include grounding metadata
+export interface CustomGenerateContentResponse extends GeminiGenerateContentResponseSDK {
+   // .text property is inherited from GeminiGenerateContentResponseSDK
+   candidates?: (Candidate & { groundingMetadata?: GroundingMetadata })[];
+}
+
+
+// For Gemini thread analysis result
+export interface GeminiThreadAnalysis {
+  summary: string;
+  mainTopics: string[];
+  commonSentiments: string[];
+  keyDiscussions: string[]; // e.g., "Post >>123 started a debate about X"
+  replyAngles: string[]; // Suggested ways to reply or topics to engage with
+}
+
+// For ongoing Gemini-Dvach conversations
+export interface GeminiDvachConversation {
+  // Key for the map could be the original post num Gemini replied to, or Gemini's first post num in this convo
+  dvachRootPostByGeminiNum: string; // The Dvach post number where Gemini *started* its participation in this specific conversation chain.
+  board: string;
+  threadId: string;
+  geminiChatInstance: GeminiChat; // Stored chat instance
+  history: ChatMessage[]; // Full history including initial prompt and subsequent Dvach replies/Gemini responses
+  lastCheckedTimestamp: number; // To know when we last looked for replies to this conversation
+  participatingPostNumbers: string[]; // All Dvach post numbers involved (trigger, Gemini replies, user replies to Gemini)
+}

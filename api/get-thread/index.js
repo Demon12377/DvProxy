@@ -1,0 +1,80 @@
+// api/get-thread/index.js
+import fetch from 'node-fetch';
+
+const DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+export default async function handler(req, res) {
+  const timestamp = new Date().toISOString();
+  console.log(`${timestamp} [api/get-thread] Request received. Method: ${req.method}, URL: ${req.url}`);
+
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(200).json({ message: 'CORS preflight successful for /api/get-thread' });
+  }
+
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET, OPTIONS');
+    return res.status(405).json({ error: { code: 405, message: `Method Not Allowed. Only GET requests are accepted for /api/get-thread. Received: ${req.method}` } });
+  }
+
+  const { board, thread } = req.query;
+
+  if (!board || !thread) {
+    console.warn(`${timestamp} [api/get-thread] Missing board or thread query parameters.`);
+    return res.status(400).json({ error: { code: 400, message: 'Board and thread query parameters are required (e.g., /api/get-thread?board=b&thread=12345)' } });
+  }
+
+  const dvachUrl = `https://2ch.hk/${board}/res/${thread}.json`;
+  console.log(`${timestamp} [api/get-thread] Fetching from Dvach API: ${dvachUrl}`);
+
+  try {
+    const dvachResponse = await fetch(dvachUrl, {
+      headers: {
+        'User-Agent': DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS,
+        'Accept': 'application/json',
+      }
+    });
+
+    const responseBodyText = await dvachResponse.text();
+
+    if (!dvachResponse.ok) {
+      console.error(`${timestamp} [api/get-thread] Error from Dvach API. Status: ${dvachResponse.status}. URL: ${dvachUrl}. Response: ${responseBodyText.substring(0, 500)}`);
+      // Try to parse error from Dvach if it's JSON
+      try {
+        const errorJson = JSON.parse(responseBodyText);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(dvachResponse.status).json(errorJson);
+      } catch (e) {
+        // If Dvach error is not JSON, return plain text
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'application/json'); // Still JSON for our error wrapper
+        return res.status(dvachResponse.status).json({ error: { code: dvachResponse.status, message: `Dvach API error: ${responseBodyText.substring(0, 200)}` }});
+      }
+    }
+    
+    // Assuming Dvach response is JSON if dvachResponse.ok
+    let threadData;
+    try {
+        threadData = JSON.parse(responseBodyText);
+    } catch(e) {
+        console.error(`${timestamp} [api/get-thread] Dvach response was OK but not valid JSON. URL: ${dvachUrl}. Response: ${responseBodyText.substring(0,500)}`);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(500).json({ error: { code: 500, message: `Dvach returned OK but response was not valid JSON. ${responseBodyText.substring(0,200)}`}});
+    }
+    
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(200).json(threadData);
+
+  } catch (error) {
+    console.error(`${timestamp} [api/get-thread] Internal server error:`, error);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(500).json({ error: { code: 500, message: `Internal server error in /api/get-thread: ${error.message}` } });
+  }
+}
