@@ -632,13 +632,20 @@ const App: React.FC = () => {
                     setAutonomousBotStatus(`Preparing reply to random post >>${randomPostToReply.num}`);
                     const modifiedSystemPrompt = getModifiedBotSystemPrompt(settings.autonomousBotSystemPrompt, settings.autonomousBotPersonalityPreset);
                     
+                    const chatConfigForCreation: any = { // Use 'any' to bypass strict GenerationConfig typing if needed for systemInstruction
+                        systemInstruction: modifiedSystemPrompt,
+                        temperature: 0.8, 
+                        topK: 40, 
+                        topP: 0.95, 
+                        maxOutputTokens: 512,
+                    };
+                    if (settings.useThinkingBudget) {
+                        chatConfigForCreation.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
+                    }
+
                     const botChat: Chat = ai.chats.create({ 
                         model: GEMINI_TEXT_MODEL,
-                        config: {
-                            systemInstruction: modifiedSystemPrompt,
-                            temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
-                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
-                        },
+                        config: chatConfigForCreation,
                         history: []
                     }); 
                     
@@ -660,7 +667,7 @@ const App: React.FC = () => {
                         } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${randomPostToReply.num} for bot: ${(imgErr as Error).message}`); }
                     }
                     
-                    const stream = await botChat.sendMessageStream({ message: initialUserMessageParts }); 
+                    const stream = await botChat.sendMessageStream(initialUserMessageParts); 
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
                     
@@ -727,13 +734,20 @@ const App: React.FC = () => {
                             parts: m.parts
                         }));
                    
+                    const chatConfigForRehydration: any = { // Use 'any' to bypass strict GenerationConfig typing
+                        systemInstruction: convo.botSystemPromptUsed,
+                        temperature: 0.8, 
+                        topK: 40, 
+                        topP: 0.95, 
+                        maxOutputTokens: 512,
+                    };
+                    if (settings.useThinkingBudget) {
+                        chatConfigForRehydration.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
+                    }
+
                    currentConvoChatInstance = ai.chats.create({ 
                        model: GEMINI_TEXT_MODEL,
-                       config: {
-                            systemInstruction: convo.botSystemPromptUsed, 
-                            temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
-                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
-                       },
+                       config: chatConfigForRehydration,
                        history: rehydratedHistory
                    }); 
                    convo.geminiChatInstance = currentConvoChatInstance; 
@@ -762,7 +776,7 @@ const App: React.FC = () => {
 
                         convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: userReplyParts }); 
+                        const geminiResponse = await currentConvoChatInstance.sendMessageStream(userReplyParts); 
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
