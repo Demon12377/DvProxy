@@ -597,12 +597,12 @@ const App: React.FC = () => {
     const runBotCycle = async () => {
       if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) { 
           setAutonomousBotActive(false); 
-          addAutonomousBotActivityLog("Bot stopping: critical prerequisite lost (AI, Login, or Bot not active).");
+          addAutonomousBotActivityLog(String("Bot stopping: critical prerequisite lost (AI, Login, or Bot not active)."));
           return;
       }
-      setAutonomousBotStatus(`Monitoring /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`);
-      addAutonomousBotActivityLog(`Checking for new posts in /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}... Mode: ${settings.autonomousBotReplyMode}`);
-
+      setAutonomousBotStatus(`Monitoring /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`); 
+      addAutonomousBotActivityLog(String(`Checking for new posts in /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}... Mode: ${settings.autonomousBotReplyMode}`));
+      
       try {
         const latestPostsInThread = await handleLoadThread(true); 
         if (!latestPostsInThread || latestPostsInThread.length === 0) {
@@ -632,20 +632,16 @@ const App: React.FC = () => {
                     setAutonomousBotStatus(`Preparing reply to random post >>${randomPostToReply.num}`);
                     const modifiedSystemPrompt = getModifiedBotSystemPrompt(settings.autonomousBotSystemPrompt, settings.autonomousBotPersonalityPreset);
                     
-                    const chatConfigForCreation: any = { // Use 'any' to bypass strict GenerationConfig typing if needed for systemInstruction
-                        systemInstruction: modifiedSystemPrompt,
-                        temperature: 0.8, 
-                        topK: 40, 
-                        topP: 0.95, 
-                        maxOutputTokens: 512,
-                    };
-                    if (settings.useThinkingBudget) {
-                        chatConfigForCreation.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
-                    }
-
-                    const botChat: Chat = ai.chats.create({ 
+                    const botChat: Chat = ai.chats.create({
                         model: GEMINI_TEXT_MODEL,
-                        config: chatConfigForCreation,
+                        config: {
+                            systemInstruction: modifiedSystemPrompt,
+                            temperature: 0.8, 
+                            topK: 40, 
+                            topP: 0.95, 
+                            maxOutputTokens: 512,
+                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget } })
+                        },
                         history: []
                     }); 
                     
@@ -667,7 +663,7 @@ const App: React.FC = () => {
                         } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${randomPostToReply.num} for bot: ${(imgErr as Error).message}`); }
                     }
                     
-                    const stream = await botChat.sendMessageStream(initialUserMessageParts); 
+                    const stream = await botChat.sendMessageStream({ message: initialUserMessageParts });
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
                     
@@ -733,21 +729,16 @@ const App: React.FC = () => {
                             role: m.role as 'user' | 'model', 
                             parts: m.parts
                         }));
-                   
-                    const chatConfigForRehydration: any = { // Use 'any' to bypass strict GenerationConfig typing
-                        systemInstruction: convo.botSystemPromptUsed,
-                        temperature: 0.8, 
-                        topK: 40, 
-                        topP: 0.95, 
-                        maxOutputTokens: 512,
-                    };
-                    if (settings.useThinkingBudget) {
-                        chatConfigForRehydration.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
-                    }
-
                    currentConvoChatInstance = ai.chats.create({ 
                        model: GEMINI_TEXT_MODEL,
-                       config: chatConfigForRehydration,
+                       config: {
+                            systemInstruction: convo.botSystemPromptUsed,
+                            temperature: 0.8, 
+                            topK: 40, 
+                            topP: 0.95, 
+                            maxOutputTokens: 512,
+                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget } })
+                       },
                        history: rehydratedHistory
                    }); 
                    convo.geminiChatInstance = currentConvoChatInstance; 
@@ -776,7 +767,7 @@ const App: React.FC = () => {
 
                         convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await currentConvoChatInstance.sendMessageStream(userReplyParts); 
+                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: userReplyParts });
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
@@ -1112,7 +1103,7 @@ const App: React.FC = () => {
          <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Gemini-Dvach Interaction</h3>
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({geminiAnalyzeOpMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in OP Post (Manual Reply)</label>
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e => handleUpdateSettings({geminiAnalyzeAnonMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in Non-OP Posts (Manual Reply)</label>
-        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({geminiReplyWithGeneratedImage: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Attempts to Generate Image with Replies (Manual & Bot)</label>
+        {/* geminiReplyWithGeneratedImage moved to Autonomous Bot section for clarity and to global for manual */}
       </div>
       <details className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
         <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400">Advanced Botting Features (Experimental/Legacy)</summary>
