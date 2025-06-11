@@ -7,7 +7,6 @@ import {
   DvachThreadResponse, 
   DvachFile, GeminiDvachConversation,
   DvachSessionCookies, AutonomousBotPersonalityPreset, AutonomousBotReplyMode
-  // GeminiChat from './types' removed as it was unused in App.tsx context
 } from './types'; 
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
 import { 
@@ -57,8 +56,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiTopP: 0.95,
   geminiTopK: 40,
   geminiMaxOutputTokens: 1024,
-  geminiResponseMimeType: "text/plain", // For old generic tool, not used now
-  useSearchGrounding: false, // For old generic tool, not used now
+  geminiResponseMimeType: "text/plain", 
+  useSearchGrounding: false, 
   useThinkingBudget: true, 
   geminiThinkingBudget: 0, 
 
@@ -82,12 +81,11 @@ function buildProxiedGetUrlForApp(
   }
   switch (proxyMode) {
     case 'vercel_serverless':
-      // This mode is for /api/get-thread. For direct image GETs, it's not applicable unless customProxyUrl is also set for images.
-      if (customProxyUrl) { // If a custom proxy is *also* set, assume it's for non-API GETs like images
+      if (customProxyUrl) { 
          if (customProxyUrl.startsWith(PROXY_URL_GO_X2U_BASE.split('?')[0])) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
          if (customProxyUrl.startsWith('http') && customProxyUrl.includes('cors-anywhere')) return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
-         if (customProxyUrl.endsWith('=')) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`; // Param style for custom
-         return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`; // Prefix style for custom
+         if (customProxyUrl.endsWith('=')) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`; 
+         return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`; 
       }
       console.warn(`[App/buildProxiedUrl] 'vercel_serverless' proxy mode selected, but no custom proxy specified for external GET to '${targetUrl}'. Attempting direct fetch. This might fail due to CORS.`);
       return targetUrl; 
@@ -161,14 +159,12 @@ const App: React.FC = () => {
         autonomousBotSystemPrompt: initialSettings.autonomousBotSystemPrompt || DEFAULT_APP_SETTINGS.autonomousBotSystemPrompt,
         botAnalyzesImagesInTriggerPosts: initialSettings.botAnalyzesImagesInTriggerPosts === undefined ? DEFAULT_APP_SETTINGS.botAnalyzesImagesInTriggerPosts : initialSettings.botAnalyzesImagesInTriggerPosts,
         geminiSystemInstruction: initialSettings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction,
-        // Ensure enum types have defaults if not in saved settings or if enum changed
         autonomousBotReplyMode: initialSettings.autonomousBotReplyMode || DEFAULT_APP_SETTINGS.autonomousBotReplyMode,
         autonomousBotPersonalityPreset: initialSettings.autonomousBotPersonalityPreset || DEFAULT_APP_SETTINGS.autonomousBotPersonalityPreset,
         autonomousBotCycleIntervalSeconds: initialSettings.autonomousBotCycleIntervalSeconds || DEFAULT_APP_SETTINGS.autonomousBotCycleIntervalSeconds,
         geminiReplyWithGeneratedImage: initialSettings.geminiReplyWithGeneratedImage === undefined ? DEFAULT_APP_SETTINGS.geminiReplyWithGeneratedImage : initialSettings.geminiReplyWithGeneratedImage,
     };
     if (processEnvApiKey && mergedSettings.geminiApiKeySource === 'env' && !initialSettings.userGeminiApiKey) {
-      // Preserve empty user key if env is source
     } else if (!processEnvApiKey && mergedSettings.geminiApiKeySource === 'env') {
       mergedSettings.geminiApiKeySource = 'user'; 
     }
@@ -202,7 +198,7 @@ const App: React.FC = () => {
   const threadPostsContainerRef = useRef<HTMLDivElement>(null);
   const [fetchError, setFetchError] = useState<string | null>(null); 
 
-  const [geminiLoading, setGeminiLoading] = useState<boolean>(false); // General Gemini loading for manual replies
+  const [geminiLoading, setGeminiLoading] = useState<boolean>(false); 
   
   const [autonomousBotActive, setAutonomousBotActive] = useState<boolean>(false);
   const [autonomousBotStatus, setAutonomousBotStatus] = useState<string>("Inactive");
@@ -212,7 +208,6 @@ const App: React.FC = () => {
     if (saved) {
         const entries: [string, Omit<GeminiDvachConversation, 'geminiChatInstance'> & { history: ChatMessage[] }][] = JSON.parse(saved);
         return new Map(entries.map(([key, convoData]) => {
-            // GeminiChatInstance will be re-initialized on demand if needed by the bot
             return [key, { ...convoData, geminiChatInstance: undefined }]; 
         }));
     }
@@ -250,7 +245,7 @@ const App: React.FC = () => {
   
   useEffect(() => {
     const storableConversations = Array.from(geminiDvachConversations.entries()).map(([key, convo]) => {
-        const { geminiChatInstance, ...restOfConvo } = convo; // eslint-disable-line @typescript-eslint/no-unused-vars
+        const { geminiChatInstance, ...restOfConvo } = convo; 
         return [key, { ...restOfConvo, history: convo.history }]; 
     });
     localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(storableConversations));
@@ -462,7 +457,7 @@ const App: React.FC = () => {
     addLog(`Gemini preparing manual reply to post >>${targetPost.num} on /${currentBoard}/${currentThreadId}...`, 'gemini');
     
     let systemInstructionForReply = settings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
-    if (!systemInstructionForReply.includes(">>POST_NUMBER\\n")) { // Ensure quoting instruction is present
+    if (!systemInstructionForReply.includes(">>POST_NUMBER\\n")) { 
         systemInstructionForReply += " If quoting, use '>>POST_NUMBER\\n'.";
     }
     systemInstructionForReply = systemInstructionForReply.replace("POST_NUMBER", targetPost.num);
@@ -567,7 +562,7 @@ const App: React.FC = () => {
       addLog(`Manual Gemini reply posted as >>${newPostNumByGemini} to /${currentBoard}/${currentThreadId}.`, 'success');
 
     } catch (error) {
-      if (! (error as Error).message.toLowerCase().includes("post failed")) { // Avoid double-logging if commonPostToDvach already logged
+      if (! (error as Error).message.toLowerCase().includes("post failed")) { 
          addLog(`Error during manual Gemini reply generation or processing for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
       }
     } finally {
@@ -575,7 +570,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Autonomous Bot Logic
   useEffect(() => {
     if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) {
       if (autonomousBotIntervalRef.current) {
@@ -594,15 +588,15 @@ const App: React.FC = () => {
             case 'slightly_aggressive': prefix = "Adopt a mildly confrontational and assertive tone. Question the previous post if appropriate, but avoid direct insults.\n\n"; break;
             case 'sarcastic_ironic': prefix = "Employ sarcasm or irony in your response. Be subtle but clear.\n\n"; break;
             case 'neutral_informative': prefix = "Maintain a neutral and informative tone. Stick to facts or objective analysis if possible.\n\n"; break;
-            case 'custom': /* For future custom input */ break;
+            case 'custom': break;
             default: break;
         }
         return prefix + basePrompt;
     };
     
     const runBotCycle = async () => {
-      if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) { // Re-check criticals
-          setAutonomousBotActive(false); // Stop if criticals lost during operation
+      if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) { 
+          setAutonomousBotActive(false); 
           addAutonomousBotActivityLog("Bot stopping: critical prerequisite lost (AI, Login, or Bot not active).");
           return;
       }
@@ -640,10 +634,10 @@ const App: React.FC = () => {
                     
                     const botChat: Chat = ai.chats.create({ 
                         model: GEMINI_TEXT_MODEL,
-                        config: { 
-                            systemInstruction: modifiedSystemPrompt, 
+                        config: {
+                            systemInstruction: modifiedSystemPrompt,
                             temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
-                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }}) 
+                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
                         },
                         history: []
                     }); 
@@ -666,8 +660,7 @@ const App: React.FC = () => {
                         } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${randomPostToReply.num} for bot: ${(imgErr as Error).message}`); }
                     }
                     
-                    const stream = await botChat.sendMessageStream({ message: { parts: initialUserMessageParts } }); 
-
+                    const stream = await botChat.sendMessageStream({ message: initialUserMessageParts }); 
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
                     
@@ -705,7 +698,7 @@ const App: React.FC = () => {
                     const newConvo: GeminiDvachConversation = {
                         id: convoId, board: settings.autonomousBotTargetBoard, threadId: settings.autonomousBotTargetThreadId,
                         triggerPostNum: randomPostToReply.num, botSystemPromptUsed: modifiedSystemPrompt,
-                        geminiChatInstance: botChat, // Store the live instance
+                        geminiChatInstance: botChat, 
                         history: [
                             { id: `user-${randomPostToReply.num}`, role: 'user', parts: initialUserMessageParts, timestamp: randomPostToReply.timestamp * 1000 },
                             { id: `model-${newBotPostNum}`, role: 'model', parts: [{text: botReplyText}], timestamp: Date.now() }
@@ -722,30 +715,29 @@ const App: React.FC = () => {
                 }
             } else { addAutonomousBotActivityLog("No new eligible posts found for random reply this cycle."); }
         } else if (settings.autonomousBotReplyMode === 'replies_to_bot') {
-            // Existing logic to check replies to bot's own ongoing conversations
              for (const [convoId, convo] of newConversationsMap.entries()) {
                 if (convo.status !== 'active' || convo.board !== settings.autonomousBotTargetBoard || convo.threadId !== settings.autonomousBotTargetThreadId || !convo.lastBotReplyNum) continue;
                 
                 let currentConvoChatInstance: Chat | undefined = convo.geminiChatInstance;
-                if (!currentConvoChatInstance && ai) { // Rehydrate chat instance if missing and AI is available
+                if (!currentConvoChatInstance && ai) { 
                    const rehydratedHistory = convo.history
                         .filter(m => m.role === 'user' || m.role === 'model')
                         .map(m => ({
                             role: m.role as 'user' | 'model', 
                             parts: m.parts
                         }));
-
+                   
                    currentConvoChatInstance = ai.chats.create({ 
                        model: GEMINI_TEXT_MODEL,
-                       config: { 
-                           systemInstruction: convo.botSystemPromptUsed, 
-                           temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
-                           ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
-                        },
+                       config: {
+                            systemInstruction: convo.botSystemPromptUsed, 
+                            temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
+                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
+                       },
                        history: rehydratedHistory
                    }); 
-                   convo.geminiChatInstance = currentConvoChatInstance; // Update the convo object directly
-                   newConversationsMap.set(convoId, { ...convo, geminiChatInstance: currentConvoChatInstance }); // Also update the map being iterated
+                   convo.geminiChatInstance = currentConvoChatInstance; 
+                   newConversationsMap.set(convoId, { ...convo, geminiChatInstance: currentConvoChatInstance }); 
                    addAutonomousBotActivityLog(`Rehydrated chat instance for convo ${convoId}`);
                 }
                 if (!currentConvoChatInstance) {
@@ -757,7 +749,7 @@ const App: React.FC = () => {
                 
                 for (const dvachPost of latestPostsInThread) {
                     if (Number(dvachPost.timestamp) * 1000 <= convo.history.find(m => m.id.endsWith(lastBotPostInConvoNum))?.timestamp!) continue;
-                    if (sentMessages.some(sm => sm.num === dvachPost.num && sm.isGeminiPost)) continue; // Skip bot's own posts
+                    if (sentMessages.some(sm => sm.num === dvachPost.num && sm.isGeminiPost)) continue; 
                     if (convo.participatingPostNumbers.includes(dvachPost.num)) continue;
             
                     const botPostMentionedRegex = new RegExp(`&gt;&gt;(${lastBotPostInConvoNum})`);
@@ -770,7 +762,7 @@ const App: React.FC = () => {
 
                         convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: { parts: userReplyParts } }); 
+                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: userReplyParts }); 
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
@@ -828,7 +820,7 @@ const App: React.FC = () => {
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autonomousBotActive, ai, dvachSessionCookies, settings]); // Simplified deps, check if settings changes should restart.
+  }, [autonomousBotActive, ai, dvachSessionCookies, settings]); 
   
   const toggleTheme = () => {
     handleUpdateSettings({ theme: settings.theme === 'dark' ? 'light' : (settings.theme === 'light' ? 'system' : 'dark') });
@@ -875,7 +867,7 @@ const App: React.FC = () => {
     </div>
   );
 
-  const renderDvachBotPanel = () => ( // This is the "Dvach Ops" tab
+  const renderDvachBotPanel = () => ( 
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <div className="flex justify-between items-center border-b pb-2 border-gray-300 dark:border-gray-700">
         <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400">Dvach Operations (Manual)</h2>
@@ -1066,7 +1058,7 @@ const App: React.FC = () => {
             <option value="custom_general_prefix">Custom: General Prefix URL (e.g., https://myproxy.com/)</option>
             <option value="custom_general_param">Custom: General Parameter URL (e.g., ...?url=)</option>
             <option value="none">No Proxy (May not work due to CORS)</option></select></div>
-        {(settings.proxyModeForGET.startsWith('custom_') || settings.proxyModeForGET === 'vercel_serverless') && ( // Show custom URL if custom mode OR if vercel_serverless (for images)
+        {(settings.proxyModeForGET.startsWith('custom_') || settings.proxyModeForGET === 'vercel_serverless') && ( 
           <div><label htmlFor="settingsCustomProxyUrlForGET" className="block text-sm font-medium">
             {settings.proxyModeForGET === 'vercel_serverless' ? "Optional Custom Proxy for Images (if Vercel Serverless for thread data):" : "Custom Proxy URL Base for GET:"}
             </label>
@@ -1169,11 +1161,10 @@ const App: React.FC = () => {
           {[
             { id: 'dvach', label: 'Dvach Ops', icon: IconCpu },
             { id: 'bot_control', label: 'Bot Control', icon: IconMessageChat },
-            // { id: 'gemini_lab', label: 'Gemini Tools', icon: IconSparkles }, // Removed
             { id: 'settings', label: 'Settings', icon: IconSettings }, 
             { id: 'logs', label: 'Logs', icon: IconTerminal }
            ].map((tab) => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id as 'dvach' | 'bot_control' | 'settings' | 'logs')} // Removed 'gemini_lab' from type
+            <button key={tab.id} onClick={() => setActiveTab(tab.id as 'dvach' | 'bot_control' | 'settings' | 'logs')} 
               aria-current={activeTab === tab.id ? "page" : undefined}
               className={`flex items-center px-2 sm:px-3 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-all duration-150 ease-in-out focus:outline-none focus:ring-1 focus:ring-blue-400
                 ${activeTab === tab.id ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'}`}>
@@ -1182,7 +1173,6 @@ const App: React.FC = () => {
       <main className="container mx-auto p-3 sm:p-4 md:p-6" role="main"><div className="mt-1 sm:mt-2">
             {activeTab === 'dvach' && renderDvachBotPanel()}
             {activeTab === 'bot_control' && renderAutonomousBotControlPanel()}
-            {/* {activeTab === 'gemini_lab' && renderGeminiLabPanel()} */} {/* Removed */}
             {activeTab === 'settings' && renderSettingsPanel()}
             {activeTab === 'logs' && renderLogsPanel()}</div></main>
       <footer className="text-center py-4 border-t border-gray-200 dark:border-gray-700 mt-8">
