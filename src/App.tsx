@@ -666,7 +666,7 @@ const App: React.FC = () => {
                         } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${randomPostToReply.num} for bot: ${(imgErr as Error).message}`); }
                     }
                     
-                    const stream = await botChat.sendMessageStream({ message: initialUserMessageParts }); 
+                    const stream = await botChat.sendMessageStream({ message: { parts: initialUserMessageParts } }); 
 
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
@@ -770,7 +770,7 @@ const App: React.FC = () => {
 
                         convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: userReplyParts }); 
+                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: { parts: userReplyParts } }); 
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
