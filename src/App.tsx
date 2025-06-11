@@ -1,10 +1,10 @@
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GoogleGenAI, Part, Chat as GeminiChatInstanceType, GenerateContentParameters, GenerateImagesResponse } from "@google/genai";
+import { GoogleGenAI, Part, Chat as GeminiChatInstance } from "@google/genai"; // Removed unused imports
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ChatMessage, ProxyModeForGET,
-  GeneratedImage, DvachThreadResponse, 
-  CustomGenerateContentResponse, DvachFile, GeminiDvachConversation,
+  DvachThreadResponse, 
+  DvachFile, GeminiDvachConversation,
   DvachSessionCookies, AutonomousBotPersonalityPreset, AutonomousBotReplyMode
 } from './types'; 
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
@@ -18,8 +18,8 @@ import { generateUserAgent } from './utils/userAgentGenerator';
 
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconSun, IconMoon, IconCpu, 
-  IconSparkles, IconAlertTriangle, IconRefresh, IconPhoto, IconCopy,
-  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat
+  IconSparkles, IconAlertTriangle, IconRefresh, 
+  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat // Removed IconPhoto, IconCopy
 } from './components/Icons'; 
 
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
@@ -299,7 +299,7 @@ const App: React.FC = () => {
   }, [settings.board, settings.threadId, activeTab]);
 
 
-  const handleLoadThread = async (isBotCycle = false) => {
+  const handleLoadThread = async (isBotCycle: boolean = false): Promise<DvachPost[] | null> => {
     const boardToFetch = isBotCycle ? settings.autonomousBotTargetBoard : currentBoard;
     const threadToFetch = isBotCycle ? settings.autonomousBotTargetThreadId : currentThreadId;
 
@@ -603,7 +603,7 @@ const App: React.FC = () => {
       addAutonomousBotActivityLog(`Checking for new posts in /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}... Mode: ${settings.autonomousBotReplyMode}`);
 
       try {
-        const latestPostsInThread = await handleLoadThread(true); // true for bot cycle
+        const latestPostsInThread = await handleLoadThread(true); 
         if (!latestPostsInThread || latestPostsInThread.length === 0) {
           addAutonomousBotActivityLog("No posts found or error fetching thread for bot cycle.");
           setAutonomousBotStatus("Error fetching thread data for bot.");
@@ -710,10 +710,17 @@ const App: React.FC = () => {
              for (const [convoId, convo] of newConversationsMap.entries()) {
                 if (convo.status !== 'active' || convo.board !== settings.autonomousBotTargetBoard || convo.threadId !== settings.autonomousBotTargetThreadId || !convo.lastBotReplyNum) continue;
                 if (!convo.geminiChatInstance && ai) { // Rehydrate chat instance if missing and AI is available
+                   const rehydratedHistory = convo.history
+                        .filter(m => m.role === 'user' || m.role === 'model')
+                        .map(m => ({
+                            role: m.role as 'user' | 'model', 
+                            parts: m.parts
+                        }));
+
                    const rehydratedChat = ai.chats.create({
                        model: GEMINI_TEXT_MODEL,
                        config: { systemInstruction: convo.botSystemPromptUsed, temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512 },
-                       history: convo.history.map(m => ({role: m.role as 'user' | 'model', parts: m.parts}))
+                       history: rehydratedHistory
                    });
                    convo.geminiChatInstance = rehydratedChat;
                    newConversationsMap.set(convoId, convo);
