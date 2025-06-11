@@ -14,12 +14,12 @@ import {
   GEMINI_CHAT_HISTORY_KEY, GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   PROXY_URL_GO_X2U_BASE, DEFAULT_CORS_ANYWHERE_PROXY, DVACH_DOMAINS, DEFAULT_USER_AGENT
 } from './constants';
-import { generateUserAgent } from './utils/userAgentGenerator'; // Corrected import path
+import { generateUserAgent } from './utils/userAgentGenerator'; 
 
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconSun, IconMoon, IconCpu, 
   IconSparkles, IconAlertTriangle, IconRefresh, IconPhoto, IconBrain, IconCopy, IconWand,
-  IconLogin, IconLogout, IconUserCircle // Added login/logout icons
+  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat
 } from './components/Icons'; 
 
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
@@ -39,9 +39,14 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiAnalyzeOpMedia: true,
   geminiAnalyzeAnonMedia: false,
   geminiReplyWithGeneratedImage: false,
-  autoMonitorDvachThreadForGemini: false,
+  
+  autoMonitorDvachThreadForGemini: false, // Legacy, bot panel controls this now
+  autonomousBotTargetBoard: "b",
+  autonomousBotTargetThreadId: "",
+  autonomousBotSystemPrompt: "You are an insightful and witty anonymous user on a popular imageboard. Your replies should be relevant, concise, and in the typical style of the board. If quoting a post, use '>>POST_NUMBER\\n' format. Keep your replies relatively short and engaging.",
+  botAnalyzesImagesInTriggerPosts: true,
 
-  geminiSystemInstruction: "You are a witty and insightful anonymous user on the 2ch.hk imageboard. Your replies should be relevant, concise, and in the typical style of the board. If quoting, use '>>POST_NUMBER\\n'.",
+  geminiSystemInstruction: "You are a helpful AI assistant. Provide concise and relevant responses.", // Default for manual/chat
   geminiTemperature: 0.75,
   geminiTopP: 0.95,
   geminiTopK: 40,
@@ -49,7 +54,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiResponseMimeType: "text/plain",
   useSearchGrounding: false,
   useThinkingBudget: true, 
-  geminiThinkingBudget: 0,
+  geminiThinkingBudget: 0, // 0 means default thinking budget if useThinkingBudget is true, or disabled if useThinkingBudget is false
 
   enableRepetitivePostingMode: false,
   repetitivePostMessage: "Test post.",
@@ -61,21 +66,31 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 };
 
 function buildProxiedGetUrlForApp(
-  targetUrl: string,
+  targetUrl: string, // The original Dvach URL (e.g., https://2ch.hk/b/src/...)
   proxyMode: ProxyModeForGET,
   customProxyUrl?: string
 ): string {
+  if (!targetUrl.startsWith('http')) { // Assuming targetUrl is a full URL from Dvach
+    console.warn(`[App/buildProxiedUrl] targetUrl '${targetUrl}' is not a full URL. Returning as is.`);
+    return targetUrl;
+  }
   switch (proxyMode) {
     case 'vercel_serverless':
-      console.warn("[App.tsx/buildProxiedUrl] 'vercel_serverless' selected for GET, but attempting to build external URL. This may not work as expected for images without a dedicated image proxy function. Falling back to custom/none for this URL.");
-      if (customProxyUrl) { 
-        if (customProxyUrl.includes('go.x2u.in')) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
-        if (customProxyUrl.includes('cors-anywhere')) return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
-        return customProxyUrl.endsWith('=') ? `${customProxyUrl}${encodeURIComponent(targetUrl)}` : (customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`);
+      // This mode is for /api/get-thread. For direct image GETs, it's not applicable.
+      // Fallback to a sensible default or allow direct if no other proxy is configured.
+      console.warn(`[App/buildProxiedUrl] 'vercel_serverless' selected for GET, but attempting to build external URL for '${targetUrl}'. This mode is primarily for /api/get-thread. Consider using a different proxy mode for images or ensure customProxyUrlForGET is set if needed for images.`);
+      // If a custom proxy is set even in vercel_serverless mode, maybe it's intended for images.
+      if (customProxyUrl) {
+         if (customProxyUrl.startsWith(PROXY_URL_GO_X2U_BASE.split('?')[0])) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
+         if (customProxyUrl.startsWith('http') && customProxyUrl.includes('cors-anywhere')) return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
+         if (customProxyUrl.endsWith('=')) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
+         return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
       }
-      return targetUrl; 
+      return targetUrl; // Fallback to direct URL
+
     case 'custom_go_x2u':
-      return `${customProxyUrl || PROXY_URL_GO_X2U_BASE}${encodeURIComponent(targetUrl)}`;
+      const goX2UBase = (customProxyUrl || PROXY_URL_GO_X2U_BASE);
+      return `${goX2UBase}${encodeURIComponent(targetUrl)}`;
     case 'custom_cors_anywhere':
       const corsBase = (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY).endsWith('/') ? (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY) : `${(customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY)}/`;
       return `${corsBase}${targetUrl}`;
@@ -83,7 +98,10 @@ function buildProxiedGetUrlForApp(
       if (!customProxyUrl) return targetUrl;
       return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
     case 'custom_general_param':
-      if (!customProxyUrl) return targetUrl;
+      if (!customProxyUrl || !customProxyUrl.includes('=')) {
+        console.warn(`[App/buildProxiedUrl] Custom general param proxy mode, but URL '${customProxyUrl}' is invalid. Using direct.`);
+        return targetUrl;
+      }
       return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
     case 'none':
     default:
@@ -96,8 +114,19 @@ const formatLogDataForDisplay = (data: unknown): string => {
   if (typeof data === 'string') return data;
   if (data === null || data === undefined) return "";
   try {
+    // Handle cases like Error objects which don't stringify well with just JSON.stringify
+    if (data instanceof Error) {
+        return `Error: ${data.message}\nStack: ${data.stack}`;
+    }
     const replacer = (_key: string, value: any) =>
       typeof value === 'bigint' ? value.toString() : value;
+    
+    // For complex objects, try to get a more readable summary if direct stringify is too verbose or unhelpful
+    if (typeof data === 'object' && data !== null) {
+        if (Object.keys(data).length > 10 || JSON.stringify(data, replacer).length > 500) {
+            return `Object with keys: ${Object.keys(data).join(', ')} (Data too large for inline log, check console)`;
+        }
+    }
     return JSON.stringify(data, replacer, 2);
   } catch (e) {
     console.warn("JSON.stringify failed in formatLogDataForDisplay, falling back to String()", e, data);
@@ -108,7 +137,7 @@ const formatLogDataForDisplay = (data: unknown): string => {
       }
     }
     if (typeof data === 'object' && data !== null) {
-      return `Object with keys: ${Object.keys(data).join(', ')}`;
+      return `Object (type: ${Object.prototype.toString.call(data)}) with keys: ${Object.keys(data).join(', ')}`;
     }
     return String(data);
   }
@@ -118,17 +147,20 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(() => {
     const savedSettings = localStorage.getItem(APP_SETTINGS_KEY);
     const initialSettings = savedSettings ? JSON.parse(savedSettings) : {};
-    const mergedSettings = { 
+    const mergedSettings: AppSettings = { 
         ...DEFAULT_APP_SETTINGS, 
         ...initialSettings,
+        // Ensure critical fields have defaults if missing from saved settings
         proxyModeForGET: initialSettings.proxyModeForGET || DEFAULT_APP_SETTINGS.proxyModeForGET,
         customProxyUrlForGET: initialSettings.customProxyUrlForGET || DEFAULT_APP_SETTINGS.customProxyUrlForGET,
-        autoMonitorDvachThreadForGemini: initialSettings.autoMonitorDvachThreadForGemini || DEFAULT_APP_SETTINGS.autoMonitorDvachThreadForGemini,
-        userAgent: initialSettings.userAgent || generateUserAgent(), // Ensure userAgent is initialized
+        userAgent: initialSettings.userAgent || generateUserAgent(),
+        purchasedPasscode: initialSettings.purchasedPasscode || DEFAULT_APP_SETTINGS.purchasedPasscode,
+        autonomousBotTargetBoard: initialSettings.autonomousBotTargetBoard || DEFAULT_APP_SETTINGS.autonomousBotTargetBoard,
+        autonomousBotTargetThreadId: initialSettings.autonomousBotTargetThreadId || DEFAULT_APP_SETTINGS.autonomousBotTargetThreadId,
+        autonomousBotSystemPrompt: initialSettings.autonomousBotSystemPrompt || DEFAULT_APP_SETTINGS.autonomousBotSystemPrompt,
+        botAnalyzesImagesInTriggerPosts: initialSettings.botAnalyzesImagesInTriggerPosts === undefined ? DEFAULT_APP_SETTINGS.botAnalyzesImagesInTriggerPosts : initialSettings.botAnalyzesImagesInTriggerPosts,
+        geminiSystemInstruction: initialSettings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction,
     };
-    if (!mergedSettings.purchasedPasscode) { 
-        mergedSettings.purchasedPasscode = DEFAULT_APP_SETTINGS.purchasedPasscode;
-    }
     if (processEnvApiKey && mergedSettings.geminiApiKeySource === 'env' && !initialSettings.userGeminiApiKey) {
       // Preserve empty user key if env is source
     } else if (!processEnvApiKey && mergedSettings.geminiApiKeySource === 'env') {
@@ -139,7 +171,7 @@ const App: React.FC = () => {
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [ai, setAi] = useState<GoogleGenAI | null>(null);
-  const [activeTab, setActiveTab] = useState<'dvach' | 'gemini' | 'settings' | 'logs'>('dvach');
+  const [activeTab, setActiveTab] = useState<'dvach' | 'bot_control' | 'gemini_lab' | 'settings' | 'logs'>('dvach');
   
   const [dvachSessionCookies, setDvachSessionCookies] = useState<DvachSessionCookies | null>(() => {
     const savedCookies = localStorage.getItem(DVACH_SESSION_COOKIES_KEY);
@@ -147,47 +179,63 @@ const App: React.FC = () => {
   });
   const [isDvachLoggingIn, setIsDvachLoggingIn] = useState<boolean>(false);
 
-  const [currentBoard, setCurrentBoard] = useState<string>(settings.board);
-  const [currentThreadId, setCurrentThreadId] = useState<string>(settings.threadId);
+  const [currentBoard, setCurrentBoard] = useState<string>(settings.board); // For Dvach Ops tab
+  const [currentThreadId, setCurrentThreadId] = useState<string>(settings.threadId); // For Dvach Ops tab
   const [sentMessages, setSentMessages] = useState<SentMessageInfo[]>(() => {
     const saved = localStorage.getItem(SENT_MESSAGES_KEY);
     return saved ? JSON.parse(saved) : [];
   });
-  const [postText, setPostText] = useState<string>('');
-  const [postFile, setPostFile] = useState<File | null>(null);
-  const [postUseSage, setPostUseSage] = useState<boolean>(false);
-  const [isPosting, setIsPosting] = useState<boolean>(false);
-  const [postActivityLog, setPostActivityLog] = useState<string[]>([]); 
+  const [postText, setPostText] = useState<string>(''); // For manual post in Dvach Ops
+  const [postFile, setPostFile] = useState<File | null>(null); // For manual post
+  const [postUseSage, setPostUseSage] = useState<boolean>(false); // For manual post
+  const [isPosting, setIsPosting] = useState<boolean>(false); // For manual post
+  const [postActivityLog, setPostActivityLog] = useState<string[]>([]);  // Short log for manual post UI
 
   const [currentFetchedDvachPosts, setCurrentFetchedDvachPosts] = useState<DvachPost[]>([]);
   const [isFetchingThread, setIsFetchingThread] = useState<boolean>(false);
   const threadPostsContainerRef = useRef<HTMLDivElement>(null);
   const [fetchError, setFetchError] = useState<string | null>(null); 
 
-  // Gemini states
+  // Gemini states (generic, standalone chat, image gen)
   const [geminiLoading, setGeminiLoading] = useState<boolean>(false); 
   const [textGenPrompt, setTextGenPrompt] = useState<string>('');
   const [geminiOutputText, setGeminiOutputText] = useState<string>(''); 
   const [groundingSources, setGroundingSources] = useState<GroundingChunk[]>([]);
-  const [imageGenPrompt, setImageGenPrompt] = useState<string>('');
+  const [imageGenPrompt, setImageGenPrompt] = useState<string>(''); // For generic image gen
   const [numImagesToGenerate, setNumImagesToGenerate] = useState<number>(1);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]); 
   const [isGeneratingImage, setIsGeneratingImage] = useState<boolean>(false);
-  const [geminiChatInput, setGeminiChatInput] = useState<string>('');
+  const [geminiChatInput, setGeminiChatInput] = useState<string>(''); // For standalone chat
   const [geminiChatMessages, setGeminiChatMessages] = useState<ChatMessage[]>(() => {
     const saved = localStorage.getItem(GEMINI_CHAT_HISTORY_KEY);
     return saved ? JSON.parse(saved) : [];
   });
-  const [currentGeminiChat, setCurrentGeminiChat] = useState<GeminiChatInstanceType | null>(null);
-  const [isStreamingChat, setIsStreamingChat] = useState<boolean>(false);
-  const [imageForGeminiChat, setImageForGeminiChat] = useState<File | null>(null);
+  const [currentGeminiChat, setCurrentGeminiChat] = useState<GeminiChatInstanceType | null>(null); // For standalone chat
+  const [isStreamingChat, setIsStreamingChat] = useState<boolean>(false); // For standalone chat
+  const [imageForGeminiChat, setImageForGeminiChat] = useState<File | null>(null); // For standalone chat
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
-  const [isAnalyzingThread, setIsAnalyzingThread] = useState<boolean>(false);
+  const [isAnalyzingThread, setIsAnalyzingThread] = useState<boolean>(false); // For manual thread analysis
   
+  // Autonomous Dvach Bot States
+  const [autonomousBotActive, setAutonomousBotActive] = useState<boolean>(false);
+  const [autonomousBotStatus, setAutonomousBotStatus] = useState<string>("Inactive");
+  const [autonomousBotActivityLog, setAutonomousBotActivityLog] = useState<string[]>([]);
   const [geminiDvachConversations, setGeminiDvachConversations] = useState<Map<string, GeminiDvachConversation>>(() => {
     const saved = localStorage.getItem(GEMINI_DVACH_CONVERSATIONS_KEY);
-    return saved ? new Map(JSON.parse(saved)) : new Map();
+    if (saved) {
+        const entries = JSON.parse(saved);
+        // Need to re-initialize GeminiChatInstance if it's stored as plain object
+        // This is complex. For now, let's assume if it's saved, we might lose instance state on reload.
+        // A better approach would be to recreate chat instances based on history on load.
+        // For simplicity, this example might not perfectly restore chat instances from localStorage.
+        return new Map(entries.map(([key, convo]: [string, any]) => {
+            // Basic rehydration, might need more for geminiChatInstance
+            return [key, { ...convo, geminiChatInstance: null }]; // Mark instance as needing rehydration
+        }));
+    }
+    return new Map();
   });
+  const autonomousBotIntervalRef = useRef<number | null>(null);
 
 
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info', data?: unknown) => {
@@ -199,6 +247,11 @@ const App: React.FC = () => {
   const addPostActivity = useCallback((message: string) => {
     setPostActivityLog(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 9)]);
   }, []);
+
+  const addAutonomousBotActivityLog = useCallback((message: string) => {
+    setAutonomousBotActivityLog(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 49)]);
+     addLog(message, 'bot_activity');
+  }, [addLog]);
 
 
   useEffect(() => {
@@ -218,7 +271,14 @@ const App: React.FC = () => {
   }, [geminiChatMessages]);
   
   useEffect(() => {
-    localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(Array.from(geminiDvachConversations.entries())));
+    // Storing GeminiChatInstance directly in localStorage is problematic.
+    // We should store history and re-create instances if needed.
+    // For now, this will store a simplified version.
+    const storableConversations = Array.from(geminiDvachConversations.entries()).map(([key, convo]) => {
+        const { geminiChatInstance, ...restOfConvo } = convo;
+        return [key, { ...restOfConvo, history: convo.history }]; // Store history, drop instance for localStorage
+    });
+    localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(storableConversations));
   }, [geminiDvachConversations]);
 
   useEffect(() => {
@@ -236,8 +296,11 @@ const App: React.FC = () => {
       try {
         const genAI = new GoogleGenAI({ apiKey: keyToUse });
         setAi(genAI);
-        if (!ai || (ai && (settings.geminiApiKeySource === 'env' ? processEnvApiKey : settings.userGeminiApiKey) !== (genAI as any).apiKey )) { 
-             addLog('Gemini API initialized successfully.', 'success');
+        // Avoid redundant success logs if API key source/value hasn't actually changed
+        // This simple check might not cover all cases but reduces noise.
+        const prevApiKey = (ai as any)?._apiKey; // internal, not reliable
+        if (!prevApiKey || prevApiKey !== keyToUse) {
+            addLog('Gemini API initialized successfully.', 'success');
         }
       } catch (error) {
         addLog(`Failed to initialize Gemini API: ${(error as Error).message}. Check API Key format/validity.`, 'error', error);
@@ -245,26 +308,33 @@ const App: React.FC = () => {
       }
     } else {
       setAi(null);
-      if (activeTab === 'gemini' || settings.geminiReplyWithGeneratedImage || activeTab === 'dvach' || settings.autoMonitorDvachThreadForGemini ) { 
+      // Log warning only if relevant features are active or being viewed
+      if (activeTab === 'bot_control' || activeTab === 'dvach' || settings.geminiReplyWithGeneratedImage || autonomousBotActive) { 
         if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) addLog('Gemini API key (Manual) is not set.', 'warning');
         else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected or accessible.', 'warning');
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey]); 
+  }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey, addLog]); // Removed 'ai' from deps to avoid loop on setAi
 
   const handleUpdateSettings = (newSettings: Partial<AppSettings>) => {
     setSettings(prev => ({ ...prev, ...newSettings }));
   };
   
   useEffect(() => {
-    setCurrentBoard(settings.board);
-    setCurrentThreadId(settings.threadId);
-  }, [settings.board, settings.threadId]);
+    // Sync currentBoard/currentThreadId with settings if they are for the Dvach Ops tab
+    if(activeTab === 'dvach') {
+        setCurrentBoard(settings.board);
+        setCurrentThreadId(settings.threadId);
+    }
+  }, [settings.board, settings.threadId, activeTab]);
 
 
   const handleLoadThread = async () => {
-    if (!currentBoard || !currentThreadId) {
+    const boardToFetch = activeTab === 'dvach' ? currentBoard : settings.autonomousBotTargetBoard;
+    const threadToFetch = activeTab === 'dvach' ? currentThreadId : settings.autonomousBotTargetThreadId;
+
+    if (!boardToFetch || !threadToFetch) {
       setFetchError('Board and Thread ID are required.');
       addLog('Board and Thread ID must be set to fetch thread posts.', 'warning');
       setCurrentFetchedDvachPosts([]);
@@ -272,22 +342,27 @@ const App: React.FC = () => {
     }
     setIsFetchingThread(true);
     setFetchError(null);
-    setCurrentFetchedDvachPosts([]);
+    setCurrentFetchedDvachPosts([]); // Clear previous posts
     try {
-      addLog(`Fetching thread /${currentBoard}/${currentThreadId}... Proxy for GET: ${settings.proxyModeForGET}`, 'dvach');
-      const data: DvachThreadResponse = await getThreadData(currentBoard, currentThreadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
+      addLog(`Fetching thread /${boardToFetch}/${threadToFetch}... Proxy for GET: ${settings.proxyModeForGET}`, 'dvach');
+      const data: DvachThreadResponse = await getThreadData(boardToFetch, threadToFetch, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
       
       const posts = data.threads?.[0]?.posts || [];
-      setCurrentFetchedDvachPosts(posts);
-      addLog(`Successfully fetched ${posts.length} posts from /${currentBoard}/${currentThreadId}.`, 'success');
+      setCurrentFetchedDvachPosts(posts); // This state is for the Dvach Ops viewer primarily
+      addLog(`Successfully fetched ${posts.length} posts from /${boardToFetch}/${threadToFetch}.`, 'success');
       if (threadPostsContainerRef.current) threadPostsContainerRef.current.scrollTop = 0;
-      handleUpdateSettings({ board: currentBoard, threadId: currentThreadId });
-
+      
+      // Update settings if fetched from Dvach Ops tab's inputs
+      if (activeTab === 'dvach') {
+        handleUpdateSettings({ board: boardToFetch, threadId: threadToFetch });
+      }
+      return posts; // Return posts for other uses like bot context
     } catch (err) {
       const errorMsg = (err as Error).message;
       setFetchError(errorMsg);
-      addLog(`Failed to fetch thread /${currentBoard}/${currentThreadId}: ${errorMsg}`, 'error', err);
+      addLog(`Failed to fetch thread /${boardToFetch}/${threadToFetch}: ${errorMsg}`, 'error', err);
       setCurrentFetchedDvachPosts([]);
+      return null; // Indicate failure
     } finally {
       setIsFetchingThread(false);
     }
@@ -309,7 +384,7 @@ const App: React.FC = () => {
       const errorMsg = (error as Error).message;
       setFetchError(errorMsg);
       addLog(`Dvach login failed: ${errorMsg}`, 'error', error);
-      setDvachSessionCookies(null); // Clear any old cookies on failure
+      setDvachSessionCookies(null); 
     } finally {
       setIsDvachLoggingIn(false);
     }
@@ -320,20 +395,19 @@ const App: React.FC = () => {
     addLog("Logged out from Dvach. Session cookies cleared.", 'info');
   };
 
-
   const commonPostToDvach = async (
     comment: string,
     file: File | null,
-    useSage: boolean,
+    useSageFlag: boolean,
     boardToPost: string,
-    threadIdContext: string, 
-    replyToPostNum?: string  
+    threadIdForDvachApi: string, // Dvach API 'thread' field (OP num or "0")
+    replyToPostNumForDvachApi?: string  // Dvach API 'parent' field (specific post num)
   ): Promise<string> => { 
     if (!dvachSessionCookies?.passcode_auth) {
       const errorMsg = 'Not logged into Dvach or session expired. Please login first.';
       addLog(errorMsg, 'error');
       addPostActivity(`Error: ${errorMsg}`);
-      setFetchError(errorMsg); // Show error to user
+      setFetchError(errorMsg);
       throw new Error(errorMsg);
     }
     if (!boardToPost || !comment.trim()) {
@@ -343,23 +417,22 @@ const App: React.FC = () => {
       throw new Error(errorMsg);
     }
 
-    setIsPosting(true);
+    setIsPosting(true); // Generic posting flag
     setFetchError(null);
-    const effectiveThreadIdForDvach = threadIdContext === "0" || threadIdContext === "" ? "0" : threadIdContext;
-    const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
-    const logMsg = `Attempting to post to /${boardToPost}/${targetDesc}${replyToPostNum ? ` (reply to >>${replyToPostNum})` : ''}. Comment: "${comment.substring(0,50)}..."`;
+    const targetDesc = threadIdForDvachApi === "0" ? 'new thread' : `thread ${threadIdForDvachApi}`;
+    const logMsg = `Attempting to post to /${boardToPost}/${targetDesc}${replyToPostNumForDvachApi ? ` (reply to >>${replyToPostNumForDvachApi})` : ''}. Comment: "${comment.substring(0,50)}..."`;
     addLog(logMsg, 'dvach');
-    addPostActivity(logMsg);
+    addPostActivity(logMsg); // For manual post UI
 
     try {
       const result = await postWithSessionCookie(
         dvachSessionCookies,
         boardToPost,
-        effectiveThreadIdForDvach, 
+        threadIdForDvachApi, 
         comment,
         file,
-        replyToPostNum, 
-        useSage,
+        replyToPostNumForDvachApi, 
+        useSageFlag,
         settings.userAgent
       );
       
@@ -372,8 +445,8 @@ const App: React.FC = () => {
         timestamp: Date.now(),
         comment: comment,
         board: boardToPost,
-        thread: effectiveThreadIdForDvach === "0" ? newPostNum : effectiveThreadIdForDvach, 
-        parent: replyToPostNum || (effectiveThreadIdForDvach === "0" ? undefined : effectiveThreadIdForDvach), 
+        thread: threadIdForDvachApi === "0" ? newPostNum : threadIdForDvachApi, 
+        parent: replyToPostNumForDvachApi || (threadIdForDvachApi === "0" ? undefined : threadIdForDvachApi), 
         file_info: file ? { name: file.name, size: file.size } : undefined,
       };
       setSentMessages(prev => [newSentMessage, ...prev]);
@@ -384,12 +457,11 @@ const App: React.FC = () => {
       let errorMsg = error.message;
 
       if (dvachApiError && (dvachApiError.code === -4 || dvachApiError.code === -6 || dvachApiError.code === -21 || dvachApiError.message.toLowerCase().includes("постинг запрещён") || dvachApiError.message.toLowerCase().includes("доступ запрещен"))) {
-        // Specific auth-related errors from Dvach
         errorMsg = `Dvach session likely expired or invalid (Error: ${dvachApiError.message}). Please log in again.`;
         addLog(errorMsg, 'auth', dvachApiError);
-        setDvachSessionCookies(null); // Clear invalid session
+        setDvachSessionCookies(null);
       } else {
-        addLog(`Failed to post: ${errorMsg}`, 'error', err);
+        addLog(`Failed to post: ${errorMsg}`, 'error', error);
       }
       setFetchError(errorMsg); 
       addPostActivity(`Post Failed: ${errorMsg}`);
@@ -399,30 +471,41 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSimplePost = async () => {
+  const handleSimplePost = async () => { // For manual posting from Dvach Ops
     try {
-      await commonPostToDvach(postText, postFile, postUseSage, currentBoard, currentThreadId);
+      // currentThreadId from Dvach Ops state is the 'thread_id_for_dvach' for API
+      await commonPostToDvach(postText, postFile, postUseSage, currentBoard, currentThreadId, undefined);
       setPostText('');
       setPostFile(null);
-    } catch (e) { /* error already logged by commonPostToDvach */ }
+    } catch (e) { /* error already logged */ }
   };
-
-  const handleGeminiReplyToDvachPost = async (targetPost: DvachPost) => {
+  
+  // Enhanced manual reply with Gemini, considering thread context and image
+  const handleManualGeminiReplyToDvachPost = async (targetPost: DvachPost) => {
     if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
     if (!dvachSessionCookies?.passcode_auth) { 
         addLog('Not logged into Dvach. Please login before replying with Gemini.', 'error'); 
         setFetchError('Not logged into Dvach. Please login before replying with Gemini.');
         return; 
     }
-    if (!currentBoard || !currentThreadId) { addLog('Current board or thread ID not set.', 'error'); return; }
+    if (!currentBoard || !currentThreadId) { addLog('Current board or thread ID not set for manual reply.', 'error'); return; }
 
     setGeminiLoading(true);
-    addLog(`Gemini preparing reply to post >>${targetPost.num} on /${currentBoard}/${currentThreadId}...`, 'gemini');
+    addLog(`Gemini preparing manual reply to post >>${targetPost.num} on /${currentBoard}/${currentThreadId}...`, 'gemini');
     
     let systemInstructionForReply = settings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
     systemInstructionForReply += ` You are replying to post number ${targetPost.num}. Your reply MUST start with ">>${targetPost.num}\\n".`;
     
-    let userPromptText = `Post >>${targetPost.num} (by ${targetPost.name || 'Anonymous'}) says:\n"${targetPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '').substring(0, 1000)}"`;
+    // Prepare thread context
+    let threadContextSummary = "No additional thread context available.";
+    if (currentFetchedDvachPosts.length > 0) {
+        const opPost = currentFetchedDvachPosts.find(p => p.num === currentThreadId || p.op === 1);
+        const recentPosts = currentFetchedDvachPosts.slice(-5); // Last 5 posts as recent context
+        threadContextSummary = `Thread OP (>>${opPost?.num || currentThreadId}): "${(opPost?.comment || "N/A").replace(/<[^>]*>?/gm, '').substring(0,100)}...".\n`;
+        threadContextSummary += `Recent posts include:\n` + recentPosts.map(p => `>>${p.num}: "${p.comment.replace(/<[^>]*>?/gm, '').substring(0,70)}..."`).join('\n');
+    }
+
+    let userPromptText = `Imageboard: ${DVACH_DOMAINS[0]}/${currentBoard}/${currentThreadId}\nOverall thread context:\n${threadContextSummary}\n\nNow, focus on this specific post:\nPost >>${targetPost.num} (by ${targetPost.name || 'Anonymous'}) says:\n"${targetPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '').substring(0, 1000)}"`;
     
     const geminiMessageParts: Part[] = [];
     let dvachImageToAnalyze: DvachFile | null = null;
@@ -434,22 +517,22 @@ const App: React.FC = () => {
     }
 
     if (dvachImageToAnalyze) {
-        userPromptText += `\n\nThe post >>${targetPost.num} includes media file "${dvachImageToAnalyze.name}". Consider this image in your reply.`;
+        userPromptText += `\n\nThe post >>${targetPost.num} includes media file "${dvachImageToAnalyze.name}". Please analyze this image as part of your reply generation.`;
         try {
-            const imageUrl = DVACH_DOMAINS[0] + dvachImageToAnalyze.path; 
+            // Assuming DVACH_DOMAINS[0] is the primary domain for fetching. Could be made configurable.
+            const imageUrl = `${DVACH_DOMAINS[0]}${dvachImageToAnalyze.path}`; 
             const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForGET, settings.customProxyUrlForGET);
-            addLog(`Fetching image ${dvachImageToAnalyze.name} for Gemini analysis from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
+            addLog(`Fetching image ${dvachImageToAnalyze.name} for Gemini analysis (manual reply) from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
 
             const imageResponse = await fetch(proxiedImageUrl);
             if (!imageResponse.ok) throw new Error(`Failed to fetch image: ${imageResponse.status} ${imageResponse.statusText}`);
             const imageBlob = await imageResponse.blob();
             
-            let mimeType = dvachImageToAnalyze.path.endsWith('.png') ? 'image/png' : 
-                           dvachImageToAnalyze.path.endsWith('.gif') ? 'image/gif' : 
-                           dvachImageToAnalyze.path.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
-            if (dvachImageToAnalyze.type === 1) mimeType = 'image/jpeg';
-            else if (dvachImageToAnalyze.type === 2) mimeType = 'image/png';
-            else if (dvachImageToAnalyze.type === 4) mimeType = 'image/gif';
+            let mimeType = dvachImageToAnalyze.type === 1 ? 'image/jpeg' : 
+                           dvachImageToAnalyze.type === 2 ? 'image/png' : 
+                           dvachImageToAnalyze.type === 4 ? 'image/gif' : 
+                           imageBlob.type; // Fallback to blob's type
+            if (!mimeType.startsWith('image/')) mimeType = 'image/jpeg'; // Default if type is strange
 
             const base64data = await new Promise<string>((resolve, reject) => {
                 const reader = new FileReader();
@@ -458,13 +541,13 @@ const App: React.FC = () => {
                 reader.readAsDataURL(imageBlob);
             });
             geminiMessageParts.push({ inlineData: { mimeType: mimeType, data: base64data } });
-            addLog(`Image "${dvachImageToAnalyze.name}" successfully prepared for Gemini.`, 'gemini');
+            addLog(`Image "${dvachImageToAnalyze.name}" successfully prepared for Gemini (manual reply).`, 'gemini');
         } catch (imgError) {
-            addLog(`Failed to fetch or process image "${dvachImageToAnalyze.name}" for Gemini: ${(imgError as Error).message}. Proceeding with text only.`, 'warning', imgError);
-            userPromptText += ` (Image analysis failed, rely on text).`;
+            addLog(`Failed to fetch or process image "${dvachImageToAnalyze.name}" for Gemini (manual reply): ${(imgError as Error).message}. Proceeding with text only for image part.`, 'warning', imgError);
+            userPromptText += ` (Note: Image analysis failed due to error: ${(imgError as Error).message.substring(0,100)}... rely on text description if available).`;
         }
     }
-    geminiMessageParts.push({ text: userPromptText + `\n\nGenerate your reply.` });
+    geminiMessageParts.push({ text: userPromptText + `\n\nGenerate your reply to >>${targetPost.num}.` });
     
     let geminiReplyText = "";
     try {
@@ -481,176 +564,179 @@ const App: React.FC = () => {
       if (!geminiReplyText.trim().startsWith(`>>${targetPost.num}`)) { 
           geminiReplyText = `>>${targetPost.num}\n${geminiReplyText.trim()}`;
       }
-      addLog(`Gemini generated text reply for >>${targetPost.num}: ${geminiReplyText.substring(0, 100)}...`, 'gemini');
+      addLog(`Gemini generated text for manual reply to >>${targetPost.num}: ${geminiReplyText.substring(0, 100)}...`, 'gemini');
 
       let finalFileToPost: File | null = null;
       if (settings.geminiReplyWithGeneratedImage) {
-        addLog(`Gemini generating image for reply to >>${targetPost.num}...`, 'gemini');
-        const imagePpt = `Imageboard reply context: "${geminiReplyText.substring(geminiReplyText.indexOf('\n') + 1, 200).trim()}". Style: interesting, meme-like, or abstract.`;
+        addLog(`Gemini generating image for manual reply to >>${targetPost.num}...`, 'gemini');
+        const imagePpt = `Imageboard reply context: "${geminiReplyText.substring(geminiReplyText.indexOf('\n') + 1, 200).trim()}". Style: relevant, meme-like, or abstract.`;
         const imgGenResp = await ai.models.generateImages({ model: GEMINI_IMAGE_MODEL, prompt: imagePpt, config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } });
         if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
           finalFileToPost = await base64ToFile(imgGenResp.generatedImages[0].image.imageBytes, `gemini_img_${Date.now()}.jpg`, imgGenResp.generatedImages[0].image.mimeType || 'image/jpeg');
-          addLog(`Gemini generated image for reply to >>${targetPost.num}.`, 'gemini');
-        } else { addLog(`Gemini image generation failed or no image returned for reply to >>${targetPost.num}.`, 'warning'); }
+          addLog(`Gemini generated image for manual reply to >>${targetPost.num}.`, 'gemini');
+        } else { addLog(`Gemini image generation failed or no image returned for manual reply to >>${targetPost.num}.`, 'warning'); }
       }
+      // currentThreadId is the OP Post of the thread context. targetPost.num is the specific post being replied to.
       const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, currentBoard, currentThreadId, targetPost.num);
       
       setSentMessages(prev => prev.map(msg => 
         msg.num === newPostNumByGemini ? { ...msg, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPost } : msg 
       ));
-      addLog(`Gemini reply posted as >>${newPostNumByGemini} to /${currentBoard}/${currentThreadId}.`, 'success');
-
-      if (settings.autoMonitorDvachThreadForGemini && ai) {
-        const convoId = targetPost.num; 
-        const initialUserContent: Content = { role: 'user', parts: [{text: `Original post content by ${targetPost.name || 'Anon'} (>>${targetPost.num}):\n${targetPost.comment}`}]};
-        if (dvachImageToAnalyze && geminiMessageParts.find(p => p.inlineData)) { 
-            const imgPart = geminiMessageParts.find(p => p.inlineData);
-            if(imgPart && initialUserContent.parts) initialUserContent.parts.push(imgPart);
-        }
-        const initialModelContent: Content = { role: 'model', parts: [{text: geminiReplyText}]};
-
-        const newChatHistory: ChatMessage[] = [
-            { id: `convo-${convoId}-user-orig`, role: 'user', parts: initialUserContent.parts!, timestamp: targetPost.timestamp * 1000 },
-            { id: `convo-${convoId}-model-initial`, role: 'model', parts: initialModelContent.parts!, timestamp: Date.now() }
-        ];
-        
-        const geminiChat = ai.chats.create({
-            model: GEMINI_TEXT_MODEL,
-            history: [ ...newChatHistory.map(h => ({role: h.role as 'user' | 'model', parts: h.parts! } as Content))], 
-            config: { systemInstruction: systemInstructionForReply, temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP, maxOutputTokens: settings.geminiMaxOutputTokens }
-        });
-
-        const newConversation: GeminiDvachConversation = {
-            dvachRootPostByGeminiNum: newPostNumByGemini,
-            board: currentBoard,
-            threadId: currentThreadId,
-            geminiChatInstance: geminiChat,
-            history: newChatHistory,
-            lastCheckedTimestamp: Date.now(),
-            participatingPostNumbers: [targetPost.num, newPostNumByGemini]
-        };
-        setGeminiDvachConversations(prev => new Map(prev).set(convoId, newConversation));
-        addLog(`GeminiDvachConversation initiated for >>${targetPost.num}, Gemini's reply >>${newPostNumByGemini}.`, 'gemini');
-      }
+      addLog(`Manual Gemini reply posted as >>${newPostNumByGemini} to /${currentBoard}/${currentThreadId}.`, 'success');
 
     } catch (error) {
-      // Error logging handled by commonPostToDvach for post failures
-      if (! (error as Error).message.toLowerCase().includes("post failed")) { // Avoid double logging
-         addLog(`Error during Gemini reply generation or processing for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
+      if (! (error as Error).message.toLowerCase().includes("post failed")) {
+         addLog(`Error during manual Gemini reply generation or processing for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
       }
     } finally {
       setGeminiLoading(false);
     }
   };
 
+  // Autonomous Bot Logic
   useEffect(() => {
-    let intervalId: NodeJS.Timeout | undefined;
-    if (settings.autoMonitorDvachThreadForGemini && ai && currentBoard && currentThreadId && geminiDvachConversations.size > 0 && dvachSessionCookies?.passcode_auth) {
-      addLog(`Auto-monitoring Gemini conversations started for /${currentBoard}/${currentThreadId}. Interval: 30s.`, 'gemini');
-      
-      const monitorLogic = async () => {
-        if (!dvachSessionCookies?.passcode_auth) {
-          addLog("Auto-monitor: Dvach session lost, stopping.", 'auth');
-          if (intervalId) clearInterval(intervalId); // Clear interval here
+    if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) {
+      if (autonomousBotIntervalRef.current) {
+        clearInterval(autonomousBotIntervalRef.current);
+        autonomousBotIntervalRef.current = null;
+        setAutonomousBotStatus("Inactive - Stopped or Missing Config/Login");
+        addAutonomousBotActivityLog("Bot stopped or prerequisites missing (AI init, Dvach login, target board/thread).");
+      }
+      return;
+    }
+
+    const runBotCycle = async () => {
+      if (!autonomousBotActive) return; // Double check
+      setAutonomousBotStatus(`Monitoring /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`);
+      addAutonomousBotActivityLog(`Checking for new posts in /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`);
+
+      try {
+        const threadData = await getThreadData(settings.autonomousBotTargetBoard, settings.autonomousBotTargetThreadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
+        if (!threadData || !threadData.threads || threadData.threads.length === 0 || !threadData.threads[0].posts) {
+          addAutonomousBotActivityLog("No posts found or error fetching thread for bot cycle.");
+          setAutonomousBotStatus("Error fetching thread data.");
           return;
         }
-        addLog(`Auto-monitor: Checking for replies to Gemini posts in /${currentBoard}/${currentThreadId}.`, 'gemini');
-        try {
-          const threadData = await getThreadData(currentBoard, currentThreadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
-          const latestPosts = threadData.threads?.[0]?.posts || [];
-          if (latestPosts.length === 0) return;
+        const latestPostsInThread = threadData.threads[0].posts;
+        
+        const newConversations = new Map(geminiDvachConversations);
+        let botMadeAPostThisCycle = false;
 
-          const updatedConversations = new Map(geminiDvachConversations);
-          let newPostsMadeByBot = false;
+        // Check replies to existing bot conversations
+        for (const [convoId, convo] of newConversations.entries()) {
+          if (convo.status !== 'active' || convo.board !== settings.autonomousBotTargetBoard || convo.threadId !== settings.autonomousBotTargetThreadId) continue;
+          
+          const lastBotPostInConvo = convo.history.filter(m => m.role === 'model').pop();
+          if (!lastBotPostInConvo) continue; 
+          
+          // Find Dvach posts made after the bot's last post in this convo, that reply to it.
+          for (const dvachPost of latestPostsInThread) {
+            if (Number(dvachPost.timestamp) * 1000 <= lastBotPostInConvo.timestamp) continue; // Post is older than bot's last message
+            if (sentMessages.some(sm => sm.num === dvachPost.num && sm.board === convo.board && sm.thread === convo.threadId)) continue; // Already processed or self-post
+            if (convo.participatingPostNumbers.includes(dvachPost.num)) continue; // Already part of this convo
 
-          for (const [convoId, convo] of updatedConversations.entries()) {
-            if (convo.board !== currentBoard || convo.threadId !== currentThreadId) continue;
+            const botPostNumRegex = new RegExp(`&gt;&gt;(${lastBotPostInConvo.id.split('-').pop()})`); // Assuming last part of model message ID is post num
+             // Or, more reliably, use the last sentMessage from the bot in this conversation.
+            const lastSentBotMessageInConvo = sentMessages.filter(sm => sm.isGeminiPost && sm.geminiConversationId === convoId).sort((a,b) => b.timestamp - a.timestamp)[0];
+            if (!lastSentBotMessageInConvo) continue;
+            
+            const botPostMentionedRegex = new RegExp(`&gt;&gt;(${lastSentBotMessageInConvo.num})`);
 
-            const lastGeminiPostNumInConvo = convo.participatingPostNumbers.filter(num => 
-                sentMessages.find(sm => sm.num === num && sm.isGeminiPost && sm.board === currentBoard && sm.thread === currentThreadId)
-            ).pop();
-
-            if (!lastGeminiPostNumInConvo) continue;
-
-            for (const newPost of latestPosts) {
-              if (newPost.timestamp * 1000 <= convo.lastCheckedTimestamp) continue; 
-              if (sentMessages.some(sm => sm.num === newPost.num && sm.board === currentBoard && sm.thread === currentThreadId)) continue; 
-
-              const repliedToBotPostRegex = new RegExp(`&gt;&gt;(${lastGeminiPostNumInConvo})`);
-              if (newPost.comment.match(repliedToBotPostRegex) && !convo.participatingPostNumbers.includes(newPost.num)) {
-                addLog(`Auto-monitor: New reply >>${newPost.num} found for Gemini's post >>${lastGeminiPostNumInConvo} in conversation ${convoId}.`, 'gemini');
-                
-                const userReplyContent: Content = { role: 'user', parts: [{ text: newPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '') }]};
-                
-                convo.history.push({ id: `convo-${convoId}-user-${newPost.num}`, role: 'user', parts: userReplyContent.parts!, timestamp: newPost.timestamp*1000});
-                
-                if (!convo.geminiChatInstance) {
-                    addLog(`Error: Chat instance missing for convo ${convoId}. Recreating.`, 'warning');
-                    convo.geminiChatInstance = ai.chats.create({ model: GEMINI_TEXT_MODEL, history: [ ...convo.history.map(h => ({role: h.role as 'user' | 'model', parts: h.parts! } as Content))] });
-                }
-
-                const geminiResponse = await convo.geminiChatInstance.sendMessageStream({message: userReplyContent.parts!});
-                let geminiFollowUpText = "";
-                for await (const chunk of geminiResponse) {
-                    geminiFollowUpText += chunk.text || "";
-                }
-
-
-                if (!geminiFollowUpText.trim().startsWith(`>>${newPost.num}`)) {
-                    geminiFollowUpText = `>>${newPost.num}\n${geminiFollowUpText.trim()}`;
-                }
-                addLog(`Auto-monitor: Gemini generated follow-up for >>${newPost.num}: ${geminiFollowUpText.substring(0,100)}...`, 'gemini');
-
-                const newBotPostNum = await commonPostToDvach(geminiFollowUpText, null, false, currentBoard, currentThreadId, newPost.num);
-                newPostsMadeByBot = true;
-                
-                convo.history.push({ id: `convo-${convoId}-model-${newBotPostNum}`, role: 'model', parts: [{text: geminiFollowUpText}], timestamp: Date.now() });
-                convo.participatingPostNumbers.push(newPost.num, newBotPostNum);
-                convo.lastCheckedTimestamp = Date.now(); 
-                updatedConversations.set(convoId, convo);
-
-                 setSentMessages(prev => [{
-                    num: newBotPostNum, timestamp: Date.now(), comment: geminiFollowUpText,
-                    board: currentBoard, thread: currentThreadId, parent: newPost.num,
-                    isGeminiPost: true, geminiTriggerPostNum: convoId,
-                    geminiConversationId: convoId,
-                }, ...prev]);
-                break; 
+            if (dvachPost.comment.match(botPostMentionedRegex)) {
+              setAutonomousBotStatus(`Found reply >>${dvachPost.num} to bot's post >>${lastSentBotMessageInConvo.num}`);
+              addAutonomousBotActivityLog(`New reply >>${dvachPost.num} to bot's post >>${lastSentBotMessageInConvo.num} in convo ${convoId}. Processing...`);
+              
+              const userReplyParts: Part[] = [{ text: dvachPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '') }];
+              // Add image from dvachPost if bot is configured to analyze them
+              if (settings.botAnalyzesImagesInTriggerPosts && dvachPost.files && dvachPost.files.length > 0) {
+                const imageFile = dvachPost.files[0];
+                try {
+                    const imageUrl = `${DVACH_DOMAINS[0]}${imageFile.path}`;
+                    const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForGET, settings.customProxyUrlForGET);
+                    const imageResponse = await fetch(proxiedImageUrl);
+                    if (imageResponse.ok) {
+                        const imageBlob = await imageResponse.blob();
+                        const base64data = await new Promise<string>((resolve, reject) => { /* ... FileReader ... */ });
+                        let mimeType = imageFile.type === 1 ? 'image/jpeg' : imageFile.type === 2 ? 'image/png' : imageBlob.type;
+                        if (!mimeType.startsWith('image/')) mimeType = 'image/jpeg';
+                        userReplyParts.unshift({ inlineData: { mimeType, data: base64data }});
+                         addAutonomousBotActivityLog(`Image ${imageFile.name} from >>${dvachPost.num} prepared for bot.`);
+                    } else { throw new Error(`Fetch failed ${imageResponse.status}`); }
+                } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${dvachPost.num}: ${(imgErr as Error).message}`); }
               }
+
+              convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
+              
+              const geminiResponse = await convo.geminiChatInstance.sendMessageStream({message: userReplyParts});
+              let botFollowUpText = "";
+              for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
+
+              if (!botFollowUpText.trim().startsWith(`>>${dvachPost.num}`)) {
+                botFollowUpText = `>>${dvachPost.num}\n${botFollowUpText.trim()}`;
+              }
+              addAutonomousBotActivityLog(`Bot generated reply to >>${dvachPost.num}: ${botFollowUpText.substring(0,70)}...`);
+              
+              const newBotPostNum = await commonPostToDvach(botFollowUpText, null, false, convo.board, convo.threadId, dvachPost.num);
+              botMadeAPostThisCycle = true;
+              
+              const botMessageForHistory: ChatMessage = { id: `model-${newBotPostNum}`, role: 'model', parts: [{text: botFollowUpText}], timestamp: Date.now() };
+              convo.history.push(botMessageForHistory);
+              convo.participatingPostNumbers.push(dvachPost.num, newBotPostNum);
+              convo.lastCheckedTimestamp = Date.now();
+              newConversations.set(convoId, convo);
+              setSentMessages(prev => [{
+                  num: newBotPostNum, timestamp: Date.now(), comment: botFollowUpText, board: convo.board, thread: convo.threadId, parent: dvachPost.num,
+                  isGeminiPost: true, geminiConversationId: convoId, geminiTriggerPostNum: convo.triggerPostNum
+              }, ...prev]);
+              setAutonomousBotStatus(`Replied as >>${newBotPostNum} to >>${dvachPost.num}`);
+              break; // Process one reply per convo per cycle to avoid spamming / complex state
             }
           }
-          if (newPostsMadeByBot || Array.from(updatedConversations.values()).some(c => c.lastCheckedTimestamp > (geminiDvachConversations.get(c.dvachRootPostByGeminiNum)?.lastCheckedTimestamp || 0 ) )) {
-            setGeminiDvachConversations(new Map(updatedConversations));
-          }
-
-        } catch (error) {
-          addLog(`Error during auto-monitoring: ${(error as Error).message}`, 'error', error);
-           if ((error as Error).message.toLowerCase().includes("session expired") || (error as Error).message.toLowerCase().includes("login failed")) {
-                setDvachSessionCookies(null); // Clear session if auth fails during monitor
-                addLog("Auto-monitor: Dvach session seems to have expired. Logging out.", "auth");
-           }
         }
-      };
-      
-      intervalId = setInterval(monitorLogic, 30000); 
-    } else {
-      if (intervalId) {
-        clearInterval(intervalId);
-        addLog('Auto-monitoring Gemini conversations stopped.', 'gemini');
+
+        // TODO: Logic to initiate NEW conversations based on keywords in settings.autonomousBotSystemPrompt
+        // This would involve scanning latestPostsInThread for keywords if no existing convo is active for that post.
+
+        if (botMadeAPostThisCycle) {
+            setGeminiDvachConversations(new Map(newConversations)); // Persist conversation updates
+        }
+        addAutonomousBotActivityLog("Bot cycle finished.");
+
+      } catch (error) {
+        addAutonomousBotActivityLog(`Error in bot cycle: ${(error as Error).message}`);
+        setAutonomousBotStatus(`Error: ${(error as Error).message.substring(0,50)}...`);
+        if ((error as Error).message.toLowerCase().includes("session expired") || (error as Error).message.toLowerCase().includes("login failed")) {
+            setDvachSessionCookies(null);
+            setAutonomousBotActive(false); // Stop bot if session is bad
+            addLog("Autonomous Bot: Dvach session seems to have expired. Bot stopped. Please login again.", "auth");
+       }
       }
-    }
+    };
+
+    setAutonomousBotStatus(`Starting bot for /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`);
+    addAutonomousBotActivityLog(`Bot started. Target: /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}. System prompt: "${settings.autonomousBotSystemPrompt.substring(0,50)}..."`);
+    runBotCycle(); // Initial run
+    autonomousBotIntervalRef.current = setInterval(runBotCycle, 60000); // Run every 60 seconds
+
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (autonomousBotIntervalRef.current) {
+        clearInterval(autonomousBotIntervalRef.current);
+        autonomousBotIntervalRef.current = null;
+        addAutonomousBotActivityLog("Bot monitoring interval cleared.");
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.autoMonitorDvachThreadForGemini, ai, currentBoard, currentThreadId, geminiDvachConversations, dvachSessionCookies, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent, addLog, commonPostToDvach]);
+  }, [autonomousBotActive, ai, dvachSessionCookies, settings.autonomousBotTargetBoard, settings.autonomousBotTargetThreadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent, settings.autonomousBotSystemPrompt, settings.botAnalyzesImagesInTriggerPosts]);
 
 
   const handleSendGeminiChatMessage = async () => {
     if (!ai || (!geminiChatInput.trim() && !imageForGeminiChat)) return;
     const userMessageParts: Part[] = [];
+    let imagePreviewUrl: string | undefined = undefined;
+
     if (imageForGeminiChat) {
       const currentImageFile = imageForGeminiChat; 
+      imagePreviewUrl = URL.createObjectURL(currentImageFile);
       try {
         const base64data = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -660,36 +746,47 @@ const App: React.FC = () => {
         });
         userMessageParts.push({ inlineData: { mimeType: currentImageFile.type, data: base64data } });
       } catch (error) {
-        addLog("Error reading image file for chat.", 'error', error); return;
+        addLog("Error reading image file for chat.", 'error', error); 
+        if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+        return;
       }
     }
     if (geminiChatInput.trim()) userMessageParts.push({ text: geminiChatInput });
+
     const userMessage: ChatMessage = {
       id: `chat-user-${Date.now()}`, role: 'user', parts: userMessageParts, timestamp: Date.now(),
-      imagePreview: imageForGeminiChat ? URL.createObjectURL(imageForGeminiChat) : undefined,
+      imagePreview: imagePreviewUrl,
     };
     setGeminiChatMessages(prev => [...prev, userMessage]);
+    const currentInput = geminiChatInput; // Capture before clearing
     setGeminiChatInput('');
     setImageForGeminiChat(null); 
+
     const modelMessageId = `chat-model-${Date.now()}`;
     setGeminiChatMessages(prev => [...prev, { id: modelMessageId, role: 'model', parts: [{text: ""}], timestamp: Date.now(), isLoading: true }]);
     setIsStreamingChat(true);
-    setGeminiLoading(true);
+    setGeminiLoading(true); // General loading for Gemini panel
+
     try {
       let chat = currentGeminiChat;
-      if (!chat || geminiChatMessages.length <= 1) { 
-        const historyForNewChat: Content[] = geminiChatMessages
-            .filter(m => m.id !== modelMessageId && (m.role === 'user' || m.role === 'model') && m.parts.length > 0) 
+      // If history is just the user message and the empty model shell, or no chat, start new.
+      if (!chat || geminiChatMessages.length <= 2) { 
+        const historyForNewChat: Content[] = [userMessage] // Start with current user message
+            .filter(m => (m.role === 'user' || m.role === 'model') && m.parts.length > 0) 
             .map(m => ({ role: m.role as 'user' | 'model', parts: m.parts! }));
+        
         const systemInstructionConfig = settings.geminiSystemInstruction ? { systemInstruction: settings.geminiSystemInstruction } : {};
+        
         chat = ai.chats.create({
           model: GEMINI_TEXT_MODEL, history: historyForNewChat,
           config: { ...systemInstructionConfig, temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP, maxOutputTokens: settings.geminiMaxOutputTokens }
         });
         setCurrentGeminiChat(chat);
-        addLog("New Gemini chat session started.", 'gemini');
+        addLog("New Gemini chat session started (standalone).", 'gemini');
       }
-      const result = await chat.sendMessageStream({ message: userMessageParts });
+      // For sendMessageStream, the message should be what the user just sent.
+      // The history is managed by the Chat instance itself.
+      const result = await chat.sendMessageStream({ message: userMessageParts }); 
       let currentStreamedText = "";
       for await (const chunk of result) { // chunk is GenerateContentResponse
         currentStreamedText += chunk.text || ""; 
@@ -700,9 +797,9 @@ const App: React.FC = () => {
       setGeminiChatMessages(prev => prev.map(m => 
         m.id === modelMessageId ? { ...m, parts: [{ text: currentStreamedText }], isLoading: false, timestamp: Date.now() } : m
       ));
-      addLog("Gemini chat stream finished.", 'gemini');
+      addLog("Gemini chat stream finished (standalone).", 'gemini');
     } catch (error) {
-      const errorMsg = `Error in Gemini chat: ${(error as Error).message}`;
+      const errorMsg = `Error in Gemini chat (standalone): ${(error as Error).message}`;
       addLog(errorMsg, 'error', error);
       setGeminiChatMessages(prev => prev.map(m => m.id === modelMessageId ? {id: modelMessageId, role: 'system', parts: [{text: `Error: ${errorMsg}`}], timestamp: Date.now(), isLoading: false } : m));
     } finally {
@@ -714,11 +811,11 @@ const App: React.FC = () => {
   const clearGeminiChatHistory = () => {
     setGeminiChatMessages([]);
     setCurrentGeminiChat(null); 
-    addLog('Gemini chat history and session cleared.', 'info');
+    addLog('Gemini chat history and session cleared (standalone).', 'info');
   };
 
   const handleGenericGeminiTextGeneration = async () => {
-    if (!ai || !textGenPrompt.trim()) { addLog("AI not initialized or prompt is empty.", 'warning'); return; }
+    if (!ai || !textGenPrompt.trim()) { addLog("AI not initialized or prompt is empty for generic text gen.", 'warning'); return; }
     setGeminiLoading(true);
     setGeminiOutputText('');
     setGroundingSources([]);
@@ -728,6 +825,7 @@ const App: React.FC = () => {
         temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP,
         maxOutputTokens: settings.geminiMaxOutputTokens, responseMimeType: settings.geminiResponseMimeType,
       };
+      if (settings.geminiSystemInstruction) modelConfig.systemInstruction = settings.geminiSystemInstruction;
       if (settings.useSearchGrounding) modelConfig.tools = [{ googleSearch: {} }];
       
       if (GEMINI_TEXT_MODEL === "gemini-2.5-flash-preview-04-17") {
@@ -735,7 +833,7 @@ const App: React.FC = () => {
             modelConfig.thinkingConfig = { thinkingBudget: 0 };
         } else if (settings.geminiThinkingBudget > 0) { 
             modelConfig.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
-        }
+        } // if thinkingBudget is 0 and useThinkingBudget is true, it defaults to enabled.
       }
 
       const response: CustomGenerateContentResponse = await ai.models.generateContent({
@@ -744,13 +842,13 @@ const App: React.FC = () => {
       });
       const textOutput = response.text || "No text content returned.";
       setGeminiOutputText(textOutput);
-      addLog("Gemini content generation successful.", 'success');
+      addLog("Gemini content generation successful (generic).", 'success');
       if (settings.useSearchGrounding && response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
         setGroundingSources(response.candidates[0].groundingMetadata.groundingChunks);
         addLog(`Grounding sources found: ${response.candidates[0].groundingMetadata.groundingChunks.length}`, 'gemini');
       }
     } catch (error) {
-      const errorMsg = `Gemini content generation failed: ${(error as Error).message}`;
+      const errorMsg = `Gemini content generation failed (generic): ${(error as Error).message}`;
       addLog(errorMsg, 'error', error);
       setGeminiOutputText(errorMsg);
     } finally {
@@ -759,7 +857,7 @@ const App: React.FC = () => {
   };
   
   const handleGeminiImageGeneration = async () => {
-    if (!ai || !imageGenPrompt.trim()) { addLog("AI not initialized or image prompt is empty.", 'warning'); return; }
+    if (!ai || !imageGenPrompt.trim()) { addLog("AI not initialized or image prompt is empty for generic image gen.", 'warning'); return; }
     setIsGeneratingImage(true);
     setGeneratedImages([]);
     addLog(`Gemini generating ${numImagesToGenerate} image(s) for prompt: "${imageGenPrompt.substring(0, 50)}..."`, 'gemini');
@@ -773,10 +871,10 @@ const App: React.FC = () => {
           .map((sdkImg): GeneratedImage | null => sdkImg.image?.imageBytes ? ({ base64Data: sdkImg.image.imageBytes, mimeType: sdkImg.image.mimeType || 'image/jpeg', prompt: imageGenPrompt }) : null)
           .filter((img): img is GeneratedImage => img !== null);
         setGeneratedImages(imagesData);
-        addLog(`Gemini successfully generated ${imagesData.length} image(s).`, 'success');
-      } else { addLog("Gemini image generation returned no images.", 'warning'); }
+        addLog(`Gemini successfully generated ${imagesData.length} image(s) (generic).`, 'success');
+      } else { addLog("Gemini image generation returned no images (generic).", 'warning'); }
     } catch (error) {
-      const errorMsg = `Gemini image generation failed: ${(error as Error).message}`;
+      const errorMsg = `Gemini image generation failed (generic): ${(error as Error).message}`;
       addLog(errorMsg, 'error', error);
     } finally {
       setIsGeneratingImage(false);
@@ -784,27 +882,32 @@ const App: React.FC = () => {
   };
 
   const handleAnalyzeThreadWithGemini = async () => {
-    if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
-    if (currentFetchedDvachPosts.length === 0) { addLog('No Dvach posts loaded to analyze.', 'warning'); return; }
+    if (!ai) { addLog('Gemini AI not initialized for thread analysis.', 'error'); return; }
+    const postsToAnalyze = currentFetchedDvachPosts.length > 0 ? currentFetchedDvachPosts : (await handleLoadThread() || []);
+    if (postsToAnalyze.length === 0) { addLog('No Dvach posts loaded to analyze.', 'warning'); return; }
+    
     setIsAnalyzingThread(true);
-    setGeminiOutputText('');
-    addLog(`Gemini analyzing ${currentFetchedDvachPosts.length} posts from /${currentBoard}/${currentThreadId}...`, 'gemini');
-    const postsSummary = currentFetchedDvachPosts.slice(0, 30).map(p => 
+    setGeminiOutputText(''); // Clear previous analysis
+    addLog(`Gemini analyzing ${postsToAnalyze.length} posts from /${settings.board}/${settings.threadId}...`, 'gemini');
+    
+    const postsSummary = postsToAnalyze.slice(0, 30).map(p => // Limit context size
       `Post >>${p.num} (by ${p.name || 'Anon'}): "${p.comment.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>?/gm, '').substring(0, 150)}..."`
     ).join('\n');
-    const analysisPrompt = `Analyze the following imageboard thread posts from 2ch.hk/${currentBoard}/${currentThreadId}:\n\n${postsSummary}\n\nProvide:
+
+    const analysisPrompt = `Analyze the following imageboard thread posts from ${DVACH_DOMAINS[0]}/${settings.board}/${settings.threadId}:\n\n${postsSummary}\n\nProvide:
 1. A brief overall summary of the thread's discussion.
 2. Main topics or themes.
 3. Common sentiments expressed.
 4. Key discussions or arguments initiated by specific posts (mention post numbers if significant).
 5. Suggest 2-3 potential reply angles or interesting points to engage with.
 Format your response as a JSON object with keys: "summary", "mainTopics" (array of strings), "commonSentiments" (array of strings), "keyDiscussions" (array of strings), "replyAngles" (array of strings).`;
+
     try {
-      const response = await ai.models.generateContent({
+      const response: CustomGenerateContentResponse = await ai.models.generateContent({ // response type is CustomGenerateContentResponse
         model: GEMINI_TEXT_MODEL, contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
         config: { responseMimeType: 'application/json', temperature: 0.5 }
       });
-      let jsonStr = (response.text || "").trim(); 
+      let jsonStr = (response.text || "").trim(); // Access .text here
       const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
       const match = jsonStr.match(fenceRegex);
       if (match && match[2]) jsonStr = match[2].trim();
@@ -859,7 +962,7 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
   };
 
   const renderDvachPostCard = (post: DvachPost, index: number) => (
-    <div key={post.num || `post-idx-${index}`} id={`post-${post.num}`} className="p-3 mb-3 bg-gray-50 dark:bg-gray-700 rounded-lg shadow border border-gray-200 dark:border-gray-600 transition-all hover:shadow-md">
+    <div key={`${post.num}-${index}`} id={`post-${post.num}`} className="p-3 mb-3 bg-gray-50 dark:bg-gray-700 rounded-lg shadow border border-gray-200 dark:border-gray-600 transition-all hover:shadow-md">
       <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400 mb-1">
         <span>
           {post.name || 'Anonymous'} - No. <a href={`#post-${post.num}`} className="hover:underline text-blue-500 dark:text-blue-400">{post.num}</a>
@@ -872,28 +975,30 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
       {post.files && post.files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {post.files.map((file, fileIndex) => (
-            <a key={`${post.num}-file-${fileIndex}`} href={`https://2ch.hk${file.path}`} target="_blank" rel="noopener noreferrer"
+            <a key={`${post.num}-file-${fileIndex}`} 
+              href={`${DVACH_DOMAINS[0]}${file.path}`} // Assuming DVACH_DOMAINS[0] is the base URL
+              target="_blank" rel="noopener noreferrer"
               className="block w-24 h-24" title={`Name: ${file.name}\nSize: ${file.size}KB\nDimensions: ${file.width}x${file.height}${file.duration ? `\nDuration: ${file.duration}` : ''}`}>
-              <img src={`https://2ch.hk${file.thumbnail}`} alt={file.name} className="rounded object-cover w-full h-full border border-gray-300 dark:border-gray-500 hover:opacity-80 transition-opacity" loading="lazy"/>
+              <img src={`${DVACH_DOMAINS[0]}${file.thumbnail}`} alt={file.name || `file ${fileIndex}`} className="rounded object-cover w-full h-full border border-gray-300 dark:border-gray-500 hover:opacity-80 transition-opacity" loading="lazy"/>
             </a>
           ))}
         </div>
       )}
       <div className="prose prose-sm dark:prose-invert max-w-none break-words" dangerouslySetInnerHTML={{ __html: post.comment.replace(/&gt;&gt;(\d+)/g, `<a href="#post-$1" class="text-blue-500 hover:underline">&gt;&gt;$1</a>`) }}/>
       <div className="mt-2 text-right">
-        <button onClick={() => handleGeminiReplyToDvachPost(post)} disabled={geminiLoading || !ai || isPosting || !dvachSessionCookies?.passcode_auth}
+        <button onClick={() => handleManualGeminiReplyToDvachPost(post)} disabled={geminiLoading || !ai || isPosting || !dvachSessionCookies?.passcode_auth}
           className="px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
-          title={!ai ? "Gemini AI not initialized. Check API Key." : (!dvachSessionCookies?.passcode_auth ? "Not logged into Dvach." : "Reply to this post using Gemini AI")}>
+          title={!ai ? "Gemini AI not initialized. Check API Key." : (!dvachSessionCookies?.passcode_auth ? "Not logged into Dvach." : "Reply to this post using Gemini AI (with thread context & image analysis)")}>
           <IconSparkles className="mr-1 h-4 w-4"/> Reply with Gemini
         </button>
       </div>
     </div>
   );
 
-  const renderDvachBotPanel = () => (
+  const renderDvachBotPanel = () => ( // This is the "Dvach Ops" tab
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <div className="flex justify-between items-center border-b pb-2 border-gray-300 dark:border-gray-700">
-        <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400">Dvach Operations</h2>
+        <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400">Dvach Operations (Manual)</h2>
         <div className="flex items-center space-x-2">
             {dvachSessionCookies?.passcode_auth ? (
                 <>
@@ -920,13 +1025,13 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
                  <p className="mt-1 text-xs">Check logs for details. If this is a CORS/proxy issue for GET, check Settings. For POST issues, the serverless function might be down or Dvach blocked the request. For auth issues, try logging in again.</p>
               </div></div></div>)}
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md space-y-3">
-        <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Load Thread</h3>
+        <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Load Thread (for Viewer)</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div><label htmlFor="dvachBoardInput" className="block text-sm font-medium text-gray-600 dark:text-gray-300">Board:</label>
                 <input id="dvachBoardInput" type="text" value={currentBoard} onChange={(e) => setCurrentBoard(e.target.value)} placeholder="e.g., b" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/></div>
             <div><label htmlFor="dvachThreadInput" className="block text-sm font-medium text-gray-600 dark:text-gray-300">Thread ID (OP Post #):</label>
-                <input id="dvachThreadInput" type="text" value={currentThreadId} onChange={(e) => setCurrentThreadId(e.target.value)} placeholder="e.g., 12345678 or 0 for new thread" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/></div>
-            <button onClick={handleLoadThread} disabled={isFetchingThread || !currentBoard || !currentThreadId}
+                <input id="dvachThreadInput" type="text" value={currentThreadId} onChange={(e) => setCurrentThreadId(e.target.value)} placeholder="e.g., 12345678" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/></div>
+            <button onClick={() => handleLoadThread()} disabled={isFetchingThread || !currentBoard || !currentThreadId}
                 className="mt-1 md:mt-6 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-md font-medium flex items-center justify-center shadow disabled:opacity-50 transition-colors h-10"
                 title="Fetch posts from specified board/thread ID">
                 <IconRefresh className={`mr-2 h-5 w-5 ${isFetchingThread ? 'animate-spin' : ''}`}/> Fetch Thread</button></div></div>
@@ -951,7 +1056,7 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
             <button onClick={handleAnalyzeThreadWithGemini} disabled={isAnalyzingThread || currentFetchedDvachPosts.length === 0 || !ai}
                 className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
                 title={!ai ? "Gemini AI not initialized" : (currentFetchedDvachPosts.length === 0 ? "No posts loaded to analyze" : "Analyze loaded thread with Gemini")}>
-                <IconBrain className="mr-2 h-5 w-5"/> Analyze Thread</button></div>
+                <IconBrain className="mr-2 h-5 w-5"/> Analyze Thread (Viewer)</button></div>
         {(!currentBoard || !currentThreadId) && <p className="text-sm text-yellow-600 dark:text-yellow-400">Specify Board and Thread ID then click "Fetch Thread" to view posts.</p>}
         <div ref={threadPostsContainerRef} className="max-h-[600px] overflow-y-auto bg-gray-100 dark:bg-gray-800 p-2 rounded custom-scrollbar">
             {isFetchingThread && <p className="text-center p-4">Loading thread...</p>}
@@ -959,9 +1064,61 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
             {currentFetchedDvachPosts.map((post,idx) => renderDvachPostCard(post, idx))}</div></div></div>
   );
 
-  const renderGeminiPanel = () => (
+  const renderAutonomousBotControlPanel = () => (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
-      <h2 className="text-2xl font-semibold text-purple-600 dark:text-purple-400 border-b pb-2 border-gray-300 dark:border-gray-700">Gemini AI Laboratory</h2>
+      <h2 className="text-2xl font-semibold text-green-600 dark:text-green-400 border-b pb-2 border-gray-300 dark:border-gray-700">Dvach Bot Control (Autonomous)</h2>
+      {!ai && (<div className="p-3 mb-4 bg-yellow-100 dark:bg-yellow-800 border border-yellow-300 dark:border-yellow-600 rounded-md text-yellow-700 dark:text-yellow-200 text-sm flex items-center" role="alert">
+            <IconAlertTriangle className="h-5 w-5 mr-2 text-yellow-500 dark:text-yellow-400 flex-shrink-0" />
+            <span><strong>Gemini AI Not Initialized:</strong> Bot requires API key in Settings.</span></div>)}
+      {!dvachSessionCookies?.passcode_auth && (<div className="p-3 mb-4 bg-orange-100 dark:bg-orange-800 border border-orange-300 dark:border-orange-600 rounded-md text-orange-700 dark:text-orange-200 text-sm flex items-center" role="alert">
+            <IconAlertTriangle className="h-5 w-5 mr-2 text-orange-500 dark:text-orange-400 flex-shrink-0" />
+            <span><strong>Dvach Login Required:</strong> Bot requires Dvach login via Dvach Ops tab.</span></div>)}
+      
+      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-4">
+        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Bot Configuration & Control</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div><label htmlFor="botTargetBoard" className="block text-sm font-medium">Target Board:</label>
+                <input id="botTargetBoard" type="text" value={settings.autonomousBotTargetBoard} onChange={e => handleUpdateSettings({autonomousBotTargetBoard: e.target.value})} placeholder="e.g., b" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+            <div><label htmlFor="botTargetThreadId" className="block text-sm font-medium">Target Thread ID:</label>
+                <input id="botTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({autonomousBotTargetThreadId: e.target.value})} placeholder="e.g., 12345678" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+        </div>
+        <div><label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & Rules):</label>
+            <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({autonomousBotSystemPrompt: e.target.value})} rows={4} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+        <div className="flex items-center space-x-4">
+             <label className="flex items-center text-sm"><input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e => handleUpdateSettings({botAnalyzesImagesInTriggerPosts: e.target.checked})} className="mr-2 h-4 w-4 text-green-600"/>Bot analyzes images in trigger posts</label>
+             <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({geminiReplyWithGeneratedImage: e.target.checked})} className="mr-2 h-4 w-4 text-green-600"/>Bot generates images with replies</label>
+        </div>
+        <div className="flex items-center space-x-3">
+            <button onClick={() => setAutonomousBotActive(prev => !prev)} disabled={!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId}
+                className={`px-4 py-2 text-white rounded-md font-medium flex items-center shadow transition-colors disabled:opacity-50 ${autonomousBotActive ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}`}>
+                {autonomousBotActive ? <IconPlayerStop className="mr-2 h-5 w-5"/> : <IconPlayerPlay className="mr-2 h-5 w-5"/>}
+                {autonomousBotActive ? 'Stop Bot' : 'Start Bot'}
+            </button>
+            <span className={`text-sm font-semibold ${autonomousBotActive ? 'text-green-500' : 'text-red-500'}`}>{autonomousBotStatus}</span>
+        </div>
+      </div>
+
+      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
+        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Autonomous Bot Activity Log</h3>
+        <div className="max-h-80 overflow-y-auto bg-gray-50 dark:bg-gray-900 p-2 rounded custom-scrollbar border border-gray-100 dark:border-gray-700 text-xs">
+            {autonomousBotActivityLog.length === 0 ? <p className="text-center text-gray-500 dark:text-gray-400">No bot activity yet.</p> : 
+             autonomousBotActivityLog.map((log, i) => <p key={i} className="py-0.5 border-b border-gray-200 dark:border-gray-700 last:border-b-0">{log}</p>)}
+        </div>
+      </div>
+      
+      {/* TODO: Display active GeminiDvachConversations (ongoing interactions) */}
+      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
+          <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Bot's Ongoing Conversations</h3>
+          {geminiDvachConversations.size === 0 && <p className="text-sm text-gray-500 dark:text-gray-400">No active conversations tracked by the bot.</p>}
+          {/* Iterate over geminiDvachConversations map and display summaries */}
+      </div>
+
+    </div>
+  );
+
+  const renderGeminiLabPanel = () => ( // This is the old "Gemini Lab", now for generic tools
+    <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
+      <h2 className="text-2xl font-semibold text-purple-600 dark:text-purple-400 border-b pb-2 border-gray-300 dark:border-gray-700">Gemini AI Tools (Standalone)</h2>
       {!ai && (<div className="p-3 mb-4 bg-yellow-100 dark:bg-yellow-800 border border-yellow-300 dark:border-yellow-600 rounded-md text-yellow-700 dark:text-yellow-200 text-sm flex items-center" role="alert">
             <IconAlertTriangle className="h-5 w-5 mr-2 text-yellow-500 dark:text-yellow-400 flex-shrink-0" />
             <span><strong>Gemini AI Not Initialized:</strong> Please check your API key in Settings.</span></div>)}
@@ -1016,11 +1173,11 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
                     disabled={!ai || geminiLoading || isStreamingChat}/>
                  <label htmlFor="chat-image-upload" className="p-2 border rounded bg-gray-100 hover:bg-gray-200 dark:bg-gray-600 dark:hover:bg-gray-500 dark:border-gray-500 cursor-pointer" title="Attach image">
                     <IconPhoto className="h-5 w-5 text-gray-600 dark:text-gray-300"/>
-                    <input id="chat-image-upload" type="file" accept="image/png, image/jpeg, image/webp, image/heic, image/heif" className="hidden" onChange={handleImageFileChangeForChat} disabled={!ai || geminiLoading || isStreamingChat} /></label>
+                    <input id="chat-image-upload" type="file" accept="image/png, image/jpeg, image/webp, image/heic, image/heif" className="hidden" onChange={handleImageFileChangeForChat} disabled={!ai || geminiLoading || isStreamingChat || !!imageForGeminiChat} /></label>
                 <button onClick={handleSendGeminiChatMessage} disabled={!ai || geminiLoading || isStreamingChat || (!geminiChatInput.trim() && !imageForGeminiChat)}
                   className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-r flex items-center disabled:opacity-50 shadow transition-colors">
                   Send <IconSend className="ml-2 h-4 w-4"/></button></div>
-            {imageForGeminiChat && <p className="text-xs text-gray-500 mt-1">Attached: {imageForGeminiChat.name} <button onClick={() => setImageForGeminiChat(null)} className="ml-1 text-red-500 hover:underline">(remove)</button></p>}
+            {imageForGeminiChat && <p className="text-xs text-gray-500 mt-1">Attached: {imageForGeminiChat.name} <button onClick={() => {setImageForGeminiChat(null); (document.getElementById('chat-image-upload') as HTMLInputElement).value = '';}} className="ml-1 text-red-500 hover:underline">(remove)</button></p>}
             <button onClick={clearGeminiChatHistory} className="text-xs text-gray-500 hover:underline mt-1 disabled:opacity-50" disabled={geminiChatMessages.length === 0 || geminiLoading || isStreamingChat}>Clear Chat History</button></div></div>
   );
 
@@ -1028,7 +1185,7 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
      <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Application Settings</h2>
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
-        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Dvach Configuration</h3>
+        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Dvach Configuration (Manual Ops Tab)</h3>
         <div><label htmlFor="settingsBoard" className="block text-sm font-medium">Current Board (for viewer/quick post):</label>
           <input id="settingsBoard" type="text" value={settings.board} onChange={e => handleUpdateSettings({board: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/></div>
         <div><label htmlFor="settingsThreadId" className="block text-sm font-medium">Current Thread ID (for viewer/quick post, "0" for new thread):</label>
@@ -1044,52 +1201,53 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
                 <IconRefresh className="h-5 w-5"/>
               </button>
             </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Used for client-side GET requests and passed to serverless functions.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Used for client-side GET requests (like images) and passed to serverless functions.</p>
           </div>
         </div>
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
-        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Proxy for Dvach GET Requests</h3>
+        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Proxy for Dvach GET Requests (e.g., Thread Data, Images)</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400">POST requests (sending messages) use the Vercel serverless function `/api/dvach-post` and ignore these settings.</p>
         <div><label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium">Proxy Mode for GET:</label>
           <select id="settingsProxyModeForGET" value={settings.proxyModeForGET} 
             onChange={e => {
                 const mode = e.target.value as ProxyModeForGET;
                 let newCustomUrl = settings.customProxyUrlForGET;
-                if (mode === 'custom_go_x2u') newCustomUrl = PROXY_URL_GO_X2U_BASE;
-                else if (mode === 'custom_cors_anywhere') newCustomUrl = DEFAULT_CORS_ANYWHERE_PROXY;
+                if (mode === 'custom_go_x2u' && (!newCustomUrl || newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY)) newCustomUrl = PROXY_URL_GO_X2U_BASE;
+                else if (mode === 'custom_cors_anywhere' && (!newCustomUrl || newCustomUrl === PROXY_URL_GO_X2U_BASE)) newCustomUrl = DEFAULT_CORS_ANYWHERE_PROXY;
+                else if (mode === 'vercel_serverless' || mode === 'none') newCustomUrl = ""; // Clear custom URL for these modes
                 handleUpdateSettings({ proxyModeForGET: mode, customProxyUrlForGET: newCustomUrl });
             }}  
             className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500">
-            <option value="vercel_serverless">Vercel Serverless Proxy (Recommended for thread data)</option>
-            <option value="custom_go_x2u">Custom: go.x2u.in Format</option>
-            <option value="custom_cors_anywhere">Custom: cors-anywhere.com Format</option>
-            <option value="custom_general_prefix">Custom: General Prefix URL</option>
+            <option value="vercel_serverless">Vercel Serverless Proxy (Recommended for thread data; images might need other modes)</option>
+            <option value="custom_go_x2u">Custom: go.x2u.in Format (e.g., ...&url=)</option>
+            <option value="custom_cors_anywhere">Custom: cors-anywhere.com Format (e.g., .../)</option>
+            <option value="custom_general_prefix">Custom: General Prefix URL (e.g., https://myproxy.com/)</option>
             <option value="custom_general_param">Custom: General Parameter URL (e.g., ...?url=)</option>
             <option value="none">No Proxy (May not work due to CORS)</option></select></div>
-        {(settings.proxyModeForGET === 'custom_general_prefix' || settings.proxyModeForGET === 'custom_general_param' || settings.proxyModeForGET === 'custom_go_x2u' || settings.proxyModeForGET === 'custom_cors_anywhere') && (
+        {(settings.proxyModeForGET.startsWith('custom_')) && (
           <div><label htmlFor="settingsCustomProxyUrlForGET" className="block text-sm font-medium">Custom Proxy URL Base for GET:</label>
             <input id="settingsCustomProxyUrlForGET" type="text" placeholder="Enter custom proxy base URL" value={settings.customProxyUrlForGET} 
               onChange={e => handleUpdateSettings({customProxyUrlForGET: e.target.value})} 
               className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              {settings.proxyModeForGET === 'custom_go_x2u' && `Should be the go.x2u URL ending in '&url='.`}
-              {settings.proxyModeForGET === 'custom_cors_anywhere' && `Should be the cors-anywhere URL ending in '/'.`}
-              {settings.proxyModeForGET === 'custom_general_prefix' && `Prefix, e.g., https://myproxy.com/ (ends with /).`}
-              {settings.proxyModeForGET === 'custom_general_param' && `Parameter based, e.g., https://myproxy.com?target= (ends with query param name and =).`}
+              {settings.proxyModeForGET === 'custom_go_x2u' && `Should be the go.x2u URL typically ending in '&url='.`}
+              {settings.proxyModeForGET === 'custom_cors_anywhere' && `Should be the cors-anywhere URL typically ending in '/'.`}
+              {settings.proxyModeForGET === 'custom_general_prefix' && `A prefix URL, e.g., https://myproxy.com/ (should end with /).`}
+              {settings.proxyModeForGET === 'custom_general_param' && `Parameter-based URL, e.g., https://myproxy.com?target= (should end with query param name and =).`}
             </p></div>)}</div>
        <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Gemini API Configuration</h3>
         <div><label htmlFor="geminiApiKeySource" className="block text-sm font-medium">API Key Source:</label>
             <select id="geminiApiKeySource" value={settings.geminiApiKeySource} onChange={e => handleUpdateSettings({geminiApiKeySource: e.target.value as 'env' | 'user'})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500">
-              <option value="env">Use Environment API_KEY (VITE_GEMINI_API_KEY) {processEnvApiKey ? `(Detected)` : "(Not Detected)"}</option>
+              <option value="env">Use Environment API_KEY (VITE_GEMINI_API_KEY) {processEnvApiKey ? `(Detected: ${processEnvApiKey.substring(0,4)}...${processEnvApiKey.substring(processEnvApiKey.length-4)})` : "(Not Detected/Accessible)"}</option>
               <option value="user">Enter API Key Manually</option></select></div>
         {settings.geminiApiKeySource === 'user' && (<div><label htmlFor="userGeminiApiKey" className="block text-sm font-medium">Manual Gemini API Key:</label>
             <input id="userGeminiApiKey" type="password" placeholder="Enter your Gemini API Key" value={settings.userGeminiApiKey} onChange={e => handleUpdateSettings({userGeminiApiKey: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500"/></div>)}
-        <div><label htmlFor="geminiSystemInstruction" className="block text-sm font-medium">Gemini System Instruction (Default for replies & chat):</label>
+        <div><label htmlFor="geminiSystemInstruction" className="block text-sm font-medium">Default Gemini System Instruction (for manual replies & standalone chat):</label>
             <textarea id="geminiSystemInstruction" value={settings.geminiSystemInstruction} onChange={e => handleUpdateSettings({geminiSystemInstruction: e.target.value})} rows={3} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500"/></div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label htmlFor="geminiTemp" className="block text-xs font-medium">Temperature:</label>
-                <input id="geminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({geminiTemperature: parseFloat(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600"/></div>
+                <input id="geminiTemp" type="number" step="0.05" min="0" max="2" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({geminiTemperature: parseFloat(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600"/></div>
              <div><label htmlFor="geminiTopP" className="block text-xs font-medium">Top P:</label>
                 <input id="geminiTopP" type="number" step="0.05" min="0" max="1" value={settings.geminiTopP} onChange={e => handleUpdateSettings({geminiTopP: parseFloat(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600"/></div>
             <div><label htmlFor="geminiTopK" className="block text-xs font-medium">Top K:</label>
@@ -1098,18 +1256,17 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
                 <input id="geminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({geminiMaxOutputTokens: parseInt(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600"/></div></div>
          <div className="flex items-center space-x-4">
             <label className="flex items-center text-sm"><input type="checkbox" checked={settings.useSearchGrounding} onChange={e => handleUpdateSettings({useSearchGrounding: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Use Google Search Grounding (Text Gen)</label>
-            <label className="flex items-center text-sm"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({useThinkingBudget: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Use Thinking Budget (Text Gen)</label>
-             {settings.useThinkingBudget && (<input type="number" step="100" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} title="Thinking Budget (ms), 0 for default/enabled" placeholder="Budget (ms)" className="p-1.5 w-24 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 text-sm"/>)}</div></div>
+            <label className="flex items-center text-sm"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({useThinkingBudget: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Enable Thinking Budget Override (Flash model)</label>
+             {settings.useThinkingBudget && (<input type="number" step="100" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} title="Thinking Budget (ms). 0 + Enabled = Default Thinking. >0 = Custom Budget. If 'Enable Thinking Budget Override' is unchecked, thinking is default ON (non-zero budget)." placeholder="Budget (ms) or 0" className="p-1.5 w-32 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 text-sm"/>)}</div></div>
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-2">
-         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Gemini-Dvach Interaction</h3>
-        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({geminiAnalyzeOpMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in OP Post</label>
-        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e => handleUpdateSettings({geminiAnalyzeAnonMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in Non-OP Posts</label>
-        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({geminiReplyWithGeneratedImage: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Attempts to Generate Image with Replies</label>
-        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.autoMonitorDvachThreadForGemini} onChange={e => handleUpdateSettings({autoMonitorDvachThreadForGemini: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Auto-Monitors Thread for Replies (Experimental)</label>
+         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Gemini-Dvach Interaction (Manual Replies)</h3>
+        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({geminiAnalyzeOpMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in OP Post (Manual Reply)</label>
+        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e => handleUpdateSettings({geminiAnalyzeAnonMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in Non-OP Posts (Manual Reply)</label>
+        <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({geminiReplyWithGeneratedImage: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Attempts to Generate Image with Replies (Manual & Bot)</label>
       </div>
       <details className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
-        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400">Advanced Botting Features (Experimental)</summary>
-        <div className="mt-3 space-y-3"><p className="text-sm text-yellow-600 dark:text-yellow-400">Caution: Use these features responsibly and be aware of imageboard rules.</p>
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400">Advanced Botting Features (Experimental/Legacy)</summary>
+        <div className="mt-3 space-y-3"><p className="text-sm text-yellow-600 dark:text-yellow-400">Caution: Use these features responsibly and be aware of imageboard rules. These might be removed in future versions.</p>
             <div className="space-y-1"><label className="flex items-center text-sm">
                     <input type="checkbox" checked={settings.enableRepetitivePostingMode} onChange={e => handleUpdateSettings({enableRepetitivePostingMode: e.target.checked})} className="mr-2 h-4 w-4 text-orange-600 rounded focus:ring-orange-500"/>Enable Repetitive Posting Mode</label>
                 {settings.enableRepetitivePostingMode && (<div className="pl-6 space-y-2 text-sm">
@@ -1143,6 +1300,7 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
               log.type === 'gemini' ? 'bg-purple-50 dark:bg-purple-900 border-purple-500 text-purple-700 dark:text-purple-200' :
               log.type === 'dvach' ? 'bg-blue-50 dark:bg-blue-900 border-blue-500 text-blue-700 dark:text-blue-200' :
               log.type === 'auth' ? 'bg-orange-50 dark:bg-orange-900 border-orange-500 text-orange-700 dark:text-orange-200' :
+              log.type === 'bot_activity' ? 'bg-teal-50 dark:bg-teal-900 border-teal-500 text-teal-700 dark:text-teal-200' :
               'bg-gray-100 dark:bg-gray-700 border-gray-500 text-gray-700 dark:text-gray-200'}`}>
               <span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
               {Boolean(log.data) && <pre className="mt-1 text-xs whitespace-pre-wrap bg-black bg-opacity-10 dark:bg-opacity-20 p-1 rounded font-mono">{`${formattedData}`}</pre>}
@@ -1164,9 +1322,14 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
               <ThemeIcon className="h-5 w-5 sm:h-6 sm:w-6" /></button></div></div></header>
       <nav className="bg-gray-50 dark:bg-gray-800 border-b border-t border-gray-200 dark:border-gray-700 sticky top-[56px] sm:top-[68px] z-40">
         <div className="container mx-auto flex justify-center sm:justify-start flex-wrap">
-          {[{ id: 'dvach', label: 'Dvach Ops', icon: IconCpu }, { id: 'gemini', label: 'Gemini Lab', icon: IconSparkles },
-            { id: 'settings', label: 'Settings', icon: IconSettings }, { id: 'logs', label: 'Logs', icon: IconTerminal }].map((tab) => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id as 'dvach' | 'gemini' | 'settings' | 'logs')}
+          {[
+            { id: 'dvach', label: 'Dvach Ops', icon: IconCpu },
+            { id: 'bot_control', label: 'Bot Control', icon: IconMessageChat },
+            { id: 'gemini_lab', label: 'Gemini Tools', icon: IconSparkles },
+            { id: 'settings', label: 'Settings', icon: IconSettings }, 
+            { id: 'logs', label: 'Logs', icon: IconTerminal }
+           ].map((tab) => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id as 'dvach' | 'bot_control' | 'gemini_lab' | 'settings' | 'logs')}
               aria-current={activeTab === tab.id ? "page" : undefined}
               className={`flex items-center px-2 sm:px-3 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-all duration-150 ease-in-out focus:outline-none focus:ring-1 focus:ring-blue-400
                 ${activeTab === tab.id ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'}`}>
@@ -1174,7 +1337,8 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
               <span className="truncate">{tab.label}</span></button>))}</div></nav>
       <main className="container mx-auto p-3 sm:p-4 md:p-6" role="main"><div className="mt-1 sm:mt-2">
             {activeTab === 'dvach' && renderDvachBotPanel()}
-            {activeTab === 'gemini' && renderGeminiPanel()}
+            {activeTab === 'bot_control' && renderAutonomousBotControlPanel()}
+            {activeTab === 'gemini_lab' && renderGeminiLabPanel()}
             {activeTab === 'settings' && renderSettingsPanel()}
             {activeTab === 'logs' && renderLogsPanel()}</div></main>
       <footer className="text-center py-4 border-t border-gray-200 dark:border-gray-700 mt-8">

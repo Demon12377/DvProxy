@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, Candidate } from "@google/genai"; // GeminiChat renamed to GeminiChatInstanceType
+import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, Candidate, Content } from "@google/genai"; // GeminiChat renamed to GeminiChatInstanceType
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -8,7 +8,7 @@ export interface DvachFile {
   path: string; // Relative path to file on server
   thumbnail: string; // Relative path to thumbnail
   md5?: string;
-  type: number; // FileType enum from API (0: none, 1: jpg, 2: png, 6: webm, 10: mp4 etc.)
+  type: number; // FileType enum from API (0: none, 1: jpg, 2: png, 4: gif, 6: webm, 10: mp4 etc.)
   size: number; // Size in KB from API in spec, but often in bytes in practice. Be mindful.
   width: number;
   height: number;
@@ -37,7 +37,7 @@ export interface DvachPost {
   sticky?: number; // 0 or 1+
   closed?: number; // 0 or 1
   banned?: number; // 0 or 1
-  op?: number; // 0 or 1
+  op?: number; // 0 or 1 // 1 if this post is by the OP of the thread
   name?: string; // Poster name
   trip?: string;
   trip_style?: string; // For admin/mod trips
@@ -81,7 +81,7 @@ export interface DvachThreadResponse {
 
 // For API responses from /api/dvach-post and /api/dvach-login
 export interface DvachPostApiResponse { // Also used for login response structure where applicable
-  result: number; // 0 for error, 1 for success
+  result: number; // 0 for error, 1 for success (can also be 2 for passcode already active)
   reason?: string; // Error message from Dvach (makaba.md style)
   Error?: string; // Alternative error message (makaba.md style, less common now)
   error?: { code: number; message: string; }; // OpenAPI style error
@@ -120,7 +120,7 @@ export interface SentMessageInfo {
 }
 
 export type ProxyModeForGET = 
-  | 'vercel_serverless' 
+  | 'vercel_serverless' // Uses /api/get-thread for thread data, other GETs might need different handling or this mode implies specific proxy for images
   | 'custom_go_x2u' 
   | 'custom_cors_anywhere' 
   | 'custom_general_prefix' 
@@ -138,7 +138,7 @@ export interface AppSettings {
   purchasedPasscode: string; // This is the user's long-term purchased passcode string.
   
   geminiApiKeySource: 'env' | 'user';
-  userGeminiApiKey: string;
+  userGeminiApiKey: string; 
   
   theme: 'light' | 'dark' | 'system';
   
@@ -150,10 +150,15 @@ export interface AppSettings {
   geminiAnalyzeOpMedia: boolean; // Whether Gemini should consider media in OP post
   geminiAnalyzeAnonMedia: boolean; // Whether Gemini should consider media in non-OP posts
   geminiReplyWithGeneratedImage: boolean; // Whether Gemini should attempt to generate an image with its reply
-  autoMonitorDvachThreadForGemini: boolean; // Whether Gemini should auto-monitor and reply in threads
+  
+  autoMonitorDvachThreadForGemini: boolean; // General toggle, actual bot activity controlled by bot panel
+  autonomousBotTargetBoard: string;
+  autonomousBotTargetThreadId: string;
+  autonomousBotSystemPrompt: string;
+  botAnalyzesImagesInTriggerPosts: boolean; // Specific to autonomous bot
 
   // Gemini Model Configuration
-  geminiSystemInstruction: string;
+  geminiSystemInstruction: string; // Default system instruction for manual replies/general chat
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
@@ -161,15 +166,16 @@ export interface AppSettings {
   geminiResponseMimeType: 'text/plain' | 'application/json'; // For generic Gemini text generation
   useSearchGrounding: boolean; // For generic Gemini text generation
   useThinkingBudget: boolean; // If false, thinkingBudget is 0
-  geminiThinkingBudget: number; // In milliseconds, 0 disables it
+  geminiThinkingBudget: number; // In milliseconds, 0 disables it (for gemini-2.5-flash-preview-04-17)
 
-  // Repetitive Posting Mode (Advanced/Botting Feature)
+
+  // Repetitive Posting Mode (Advanced/Botting Feature) - Kept for now, might be deprecated
   enableRepetitivePostingMode: boolean;
   repetitivePostMessage: string;
   repetitivePostCount: number; // How many times to post
   repetitivePostDelay: number; // Delay in seconds between posts
 
-  // Pre-filled Posting Mode (Advanced/Botting Feature)
+  // Pre-filled Posting Mode (Advanced/Botting Feature) - Kept for now
   enablePrefilledPostingMode: boolean;
   prefilledPostMessages: string; // Newline-separated messages
   prefilledPostTargets: string; // Newline-separated target post numbers (optional)
@@ -179,14 +185,14 @@ export interface LogEntry {
   id: string;
   timestamp: number;
   message: string;
-  type: 'info' | 'error' | 'success' | 'warning' | 'gemini' | 'dvach' | 'system' | 'auth';
+  type: 'info' | 'error' | 'success' | 'warning' | 'gemini' | 'dvach' | 'system' | 'auth' | 'bot_activity';
   data?: unknown; // For structured error data or additional info
 }
 
 export interface ChatMessage { // For standalone Gemini chat UI AND GeminiDvachConversation history
   id: string; // Unique ID for React key
   role: 'user' | 'model' | 'system'; // 'system' for initial prompt or errors from system
-  parts: Part[]; // Using Gemini's Part type
+  parts: Part[]; // Using Gemini's Part type (can include text and inlineData for images)
   timestamp: number;
   imagePreview?: string; // base64 data URL for displaying sent/received images in chat UI
   isLoading?: boolean; // True if this is a model message currently being streamed
@@ -225,14 +231,16 @@ export interface GeminiThreadAnalysis {
   replyAngles: string[]; // Suggested ways to reply or topics to engage with
 }
 
-// For ongoing Gemini-Dvach conversations
+// For ongoing Gemini-Dvach conversations (Autonomous Bot)
 export interface GeminiDvachConversation {
-  // Key for the map could be the original post num Gemini replied to, or Gemini's first post num in this convo
-  dvachRootPostByGeminiNum: string; // The Dvach post number where Gemini *started* its participation in this specific conversation chain.
+  id: string; // Unique conversation ID, e.g., board-threadId-triggerPostNum
   board: string;
   threadId: string;
-  geminiChatInstance: GeminiChat; // Stored chat instance
-  history: ChatMessage[]; // Full history including initial prompt and subsequent Dvach replies/Gemini responses
-  lastCheckedTimestamp: number; // To know when we last looked for replies to this conversation
-  participatingPostNumbers: string[]; // All Dvach post numbers involved (trigger, Gemini replies, user replies to Gemini)
+  triggerPostNum: string; // The Dvach post number that initiated this specific bot interaction branch
+  botSystemPrompt: string; // System prompt active for this conversation
+  geminiChatInstance: GeminiChat; // Stored chat instance for this specific conversation branch
+  history: ChatMessage[]; // History specific to this conversation branch
+  lastCheckedTimestamp: number; // When this specific conversation branch was last updated by checking Dvach
+  participatingPostNumbers: string[]; // All Dvach post numbers involved in this branch
+  status: 'active' | 'dormant' | 'ended_by_bot' | 'error'; // Status of the conversation
 }
