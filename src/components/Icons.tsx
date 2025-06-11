@@ -149,19 +149,6 @@ export const IconCopy: React.FC<IconProps> = (props) => (
   </svg>
 );
 
-export const IconBrain: React.FC<IconProps> = (props) => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.507C9.333 4.186 10.635 4 12 4c1.365 0 2.667.186 3.75.507M8.25 4.507C7.108 5.617 6.5 7.152 6.5 8.754c0 1.517.142 2.946.408 4.254A5.006 5.006 0 006 17.5c0 .999.215 1.936.592 2.785M15.75 4.507C16.892 5.617 17.5 7.152 17.5 8.754c0 1.517-.142 2.946-.408 4.254A5.006 5.006 0 0118 17.5c0 .999-.215 1.936-.592 2.785M3.75 13.5a11.16 11.16 0 0116.5 0M8.25 4.507v.005C8.618 4.54 9.016 4.588 9.44 4.65M15.75 4.507v.005c-.372.026-.74.074-1.118.143M8.618 10.028C8.25 10.5 8 11.082 8 11.754c0 .646.215 1.229.568 1.696M15.382 10.028c.369.467.568 1.05.568 1.696 0 .672-.25 1.254-.618 1.724M12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
-  </svg>
-);
-
-export const IconWand: React.FC<IconProps> = (props) => ( // Magic Wand for text generation
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5.166 14.73A2.25 2.25 0 013 13.186V7.452a2.25 2.25 0 011.056-1.951 2.25 2.25 0 012.353-.028l3.183 2.122A2.25 2.25 0 0011.25 9.13V3.104a2.25 2.25 0 00-1.5-2.122Z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6.75V11.25l1.06.706A2.25 2.25 0 0118 13.686V7.452a2.25 2.25 0 00-1.056-1.951 2.25 2.25 0 00-2.353-.028l-.318.212M18 18.75l-1.5-1.5M16.5 21l-1.5-1.5" />
-  </svg>
-);
-
 
 export const IconLogin: React.FC<IconProps> = (props) => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
