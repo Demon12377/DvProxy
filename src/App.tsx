@@ -6,8 +6,8 @@ import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ChatMessage, ProxyModeForGET,
   DvachThreadResponse, 
   DvachFile, GeminiDvachConversation,
-  DvachSessionCookies, AutonomousBotPersonalityPreset, AutonomousBotReplyMode,
-  GeminiChat // Keep GeminiChat from ./types
+  DvachSessionCookies, AutonomousBotPersonalityPreset, AutonomousBotReplyMode
+  // Removed GeminiChat from ./types as it was unused here
 } from './types'; 
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
 import { 
@@ -250,7 +250,7 @@ const App: React.FC = () => {
   
   useEffect(() => {
     const storableConversations = Array.from(geminiDvachConversations.entries()).map(([key, convo]) => {
-        const { geminiChatInstance, ...restOfConvo } = convo;
+        const { geminiChatInstance, ...restOfConvo } = convo; // eslint-disable-line @typescript-eslint/no-unused-vars
         return [key, { ...restOfConvo, history: convo.history }]; 
     });
     localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(storableConversations));
@@ -526,7 +526,8 @@ const App: React.FC = () => {
         config: { 
           systemInstruction: systemInstructionForReply,
           temperature: settings.geminiTemperature, topP: settings.geminiTopP, 
-          topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens 
+          topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
+          ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
         }
       });
       geminiReplyText = response.text || ""; 
@@ -633,12 +634,16 @@ const App: React.FC = () => {
                     setAutonomousBotStatus(`Preparing reply to random post >>${randomPostToReply.num}`);
                     const modifiedSystemPrompt = getModifiedBotSystemPrompt(settings.autonomousBotSystemPrompt, settings.autonomousBotPersonalityPreset);
                     
-                    const createChatOpts = { // Removed CreateChatOptions type
+                    const createChatOpts = { 
                         model: GEMINI_TEXT_MODEL,
-                        config: { systemInstruction: modifiedSystemPrompt, temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512 },
+                        config: { 
+                            systemInstruction: modifiedSystemPrompt, 
+                            temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
+                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }}) 
+                        },
                         history: []
                     };
-                    const botChat = ai.chats.create(createChatOpts); // Corrected call
+                    const botChat = ai.chats.create(createChatOpts); 
                     
                     const initialUserMessageParts: Part[] = [{ text: randomPostToReply.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '') }];
                     if (settings.botAnalyzesImagesInTriggerPosts && randomPostToReply.files && randomPostToReply.files.length > 0) {
@@ -658,7 +663,7 @@ const App: React.FC = () => {
                         } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${randomPostToReply.num} for bot: ${(imgErr as Error).message}`); }
                     }
                     
-                    const stream = await botChat.sendMessageStream({ message: { parts: initialUserMessageParts } }); // Corrected call
+                    const stream = await botChat.sendMessageStream(initialUserMessageParts); 
 
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
@@ -713,7 +718,9 @@ const App: React.FC = () => {
             // Existing logic to check replies to bot's own ongoing conversations
              for (const [convoId, convo] of newConversationsMap.entries()) {
                 if (convo.status !== 'active' || convo.board !== settings.autonomousBotTargetBoard || convo.threadId !== settings.autonomousBotTargetThreadId || !convo.lastBotReplyNum) continue;
-                if (!convo.geminiChatInstance && ai) { // Rehydrate chat instance if missing and AI is available
+                
+                let currentConvoChatInstance = convo.geminiChatInstance;
+                if (!currentConvoChatInstance && ai) { // Rehydrate chat instance if missing and AI is available
                    const rehydratedHistory = convo.history
                         .filter(m => m.role === 'user' || m.role === 'model')
                         .map(m => ({
@@ -721,18 +728,22 @@ const App: React.FC = () => {
                             parts: m.parts
                         }));
 
-                   const rehydrateChatOpts = { // Removed CreateChatOptions type
+                   const rehydrateChatOpts = { 
                        model: GEMINI_TEXT_MODEL,
-                       config: { systemInstruction: convo.botSystemPromptUsed, temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512 },
+                       config: { 
+                           systemInstruction: convo.botSystemPromptUsed, 
+                           temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512,
+                           ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
+                        },
                        history: rehydratedHistory
                    };
-                   const rehydratedChat = ai.chats.create(rehydrateChatOpts); // Corrected call
-                   convo.geminiChatInstance = rehydratedChat;
-                   newConversationsMap.set(convoId, convo);
+                   currentConvoChatInstance = ai.chats.create(rehydrateChatOpts); 
+                   convo.geminiChatInstance = currentConvoChatInstance; // Update the convo object directly
+                   newConversationsMap.set(convoId, { ...convo, geminiChatInstance: currentConvoChatInstance }); // Also update the map being iterated
                    addAutonomousBotActivityLog(`Rehydrated chat instance for convo ${convoId}`);
                 }
-                if (!convo.geminiChatInstance) {
-                    addAutonomousBotActivityLog(`Skipping convo ${convoId}, chat instance not available.`);
+                if (!currentConvoChatInstance) {
+                    addAutonomousBotActivityLog(`Skipping convo ${convoId}, chat instance not available or AI not initialized.`);
                     continue;
                 }
 
@@ -753,7 +764,7 @@ const App: React.FC = () => {
 
                         convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await convo.geminiChatInstance.sendMessageStream({ message: { parts: userReplyParts } }); // Corrected call
+                        const geminiResponse = await currentConvoChatInstance.sendMessageStream(userReplyParts); 
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
