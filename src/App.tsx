@@ -1,11 +1,13 @@
+
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GoogleGenAI, Part, Chat as GeminiChatInstance } from "@google/genai"; // Removed unused imports
+import { GoogleGenAI, Part } from "@google/genai"; // Removed unused GeminiChatInstance, CreateChatOptions, SendMessageRequest
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ChatMessage, ProxyModeForGET,
   DvachThreadResponse, 
   DvachFile, GeminiDvachConversation,
-  DvachSessionCookies, AutonomousBotPersonalityPreset, AutonomousBotReplyMode
+  DvachSessionCookies, AutonomousBotPersonalityPreset, AutonomousBotReplyMode,
+  GeminiChat // Keep GeminiChat from ./types
 } from './types'; 
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
 import { 
@@ -19,7 +21,7 @@ import { generateUserAgent } from './utils/userAgentGenerator';
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconSun, IconMoon, IconCpu, 
   IconSparkles, IconAlertTriangle, IconRefresh, 
-  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat // Removed IconPhoto, IconCopy
+  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat
 } from './components/Icons'; 
 
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
@@ -631,11 +633,12 @@ const App: React.FC = () => {
                     setAutonomousBotStatus(`Preparing reply to random post >>${randomPostToReply.num}`);
                     const modifiedSystemPrompt = getModifiedBotSystemPrompt(settings.autonomousBotSystemPrompt, settings.autonomousBotPersonalityPreset);
                     
-                    const botChat = ai.chats.create({
+                    const createChatOpts = { // Removed CreateChatOptions type
                         model: GEMINI_TEXT_MODEL,
                         config: { systemInstruction: modifiedSystemPrompt, temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512 },
-                        history: [] // Start fresh for new interaction
-                    });
+                        history: []
+                    };
+                    const botChat = ai.chats.create(createChatOpts); // Corrected call
                     
                     const initialUserMessageParts: Part[] = [{ text: randomPostToReply.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '') }];
                     if (settings.botAnalyzesImagesInTriggerPosts && randomPostToReply.files && randomPostToReply.files.length > 0) {
@@ -654,8 +657,9 @@ const App: React.FC = () => {
                             } else { throw new Error(`Fetch failed ${imageResponse.status}`); }
                         } catch (imgErr) { addAutonomousBotActivityLog(`Error processing image from >>${randomPostToReply.num} for bot: ${(imgErr as Error).message}`); }
                     }
+                    
+                    const stream = await botChat.sendMessageStream({ message: { parts: initialUserMessageParts } }); // Corrected call
 
-                    const stream = await botChat.sendMessageStream({message: initialUserMessageParts});
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
                     
@@ -717,11 +721,12 @@ const App: React.FC = () => {
                             parts: m.parts
                         }));
 
-                   const rehydratedChat = ai.chats.create({
+                   const rehydrateChatOpts = { // Removed CreateChatOptions type
                        model: GEMINI_TEXT_MODEL,
                        config: { systemInstruction: convo.botSystemPromptUsed, temperature: 0.8, topK: 40, topP: 0.95, maxOutputTokens: 512 },
                        history: rehydratedHistory
-                   });
+                   };
+                   const rehydratedChat = ai.chats.create(rehydrateChatOpts); // Corrected call
                    convo.geminiChatInstance = rehydratedChat;
                    newConversationsMap.set(convoId, convo);
                    addAutonomousBotActivityLog(`Rehydrated chat instance for convo ${convoId}`);
@@ -748,7 +753,7 @@ const App: React.FC = () => {
 
                         convo.history.push({ id: `user-${dvachPost.num}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await convo.geminiChatInstance.sendMessageStream({message: userReplyParts}); // Use existing chat instance
+                        const geminiResponse = await convo.geminiChatInstance.sendMessageStream({ message: { parts: userReplyParts } }); // Corrected call
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
