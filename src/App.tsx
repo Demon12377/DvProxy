@@ -226,9 +226,9 @@ const App: React.FC = () => {
     setPostActivityLog(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 9)]);
   }, []);
 
-  const addAutonomousBotActivityLog = useCallback((message: string) => {
+  const addAutonomousBotActivityLog = useCallback((message: string, mainLogType: LogEntry['type'] = 'bot_activity') => {
     setAutonomousBotActivityLog(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 49)]);
-     addLog(message, 'bot_activity');
+     addLog(message, mainLogType);
   }, [addLog]);
 
 
@@ -597,11 +597,11 @@ const App: React.FC = () => {
     const runBotCycle = async () => {
       if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) { 
           setAutonomousBotActive(false); 
-          addAutonomousBotActivityLog(String("Bot stopping: critical prerequisite lost (AI, Login, or Bot not active)."));
+          addAutonomousBotActivityLog("Bot stopping: critical prerequisite lost (AI, Login, or Bot not active).");
           return;
       }
       setAutonomousBotStatus(`Monitoring /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`); 
-      addAutonomousBotActivityLog(String(`Checking for new posts in /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}... Mode: ${settings.autonomousBotReplyMode}`));
+      addAutonomousBotActivityLog(`Checking for new posts in /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}... Mode: ${settings.autonomousBotReplyMode}`);
       
       try {
         const latestPostsInThread = await handleLoadThread(true); 
