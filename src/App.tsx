@@ -10,7 +10,7 @@ import {
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
 import { 
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
-  GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
+  GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_Messages_STORED,
   GEMINI_CHAT_HISTORY_KEY, GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   PROXY_URL_GO_X2U_BASE, DEFAULT_CORS_ANYWHERE_PROXY, DVACH_DOMAINS, DEFAULT_USER_AGENT
 } from './constants';
@@ -40,11 +40,15 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiAnalyzeAnonMedia: false,
   geminiReplyWithGeneratedImage: false,
   
-  autoMonitorDvachThreadForGemini: false, // Legacy, bot panel controls this now
+  // Autonomous Bot specific settings
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
   autonomousBotSystemPrompt: "You are an insightful and witty anonymous user on a popular imageboard. Your replies should be relevant, concise, and in the typical style of the board. If quoting a post, use '>>POST_NUMBER\\n' format. Keep your replies relatively short and engaging.",
   botAnalyzesImagesInTriggerPosts: true,
+  autonomousBotReplyMode: 'replies_to_bot', // Default, needs UI to change
+  autonomousBotCycleIntervalSeconds: 60, // Default, needs UI to change
+  autonomousBotPersonalityPreset: 'default', // Default, needs UI to change
+
 
   geminiSystemInstruction: "You are a helpful AI assistant. Provide concise and relevant responses.", // Default for manual/chat
   geminiTemperature: 0.75,
@@ -160,6 +164,8 @@ const App: React.FC = () => {
         autonomousBotSystemPrompt: initialSettings.autonomousBotSystemPrompt || DEFAULT_APP_SETTINGS.autonomousBotSystemPrompt,
         botAnalyzesImagesInTriggerPosts: initialSettings.botAnalyzesImagesInTriggerPosts === undefined ? DEFAULT_APP_SETTINGS.botAnalyzesImagesInTriggerPosts : initialSettings.botAnalyzesImagesInTriggerPosts,
         geminiSystemInstruction: initialSettings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction,
+        geminiResponseMimeType: initialSettings.geminiResponseMimeType || DEFAULT_APP_SETTINGS.geminiResponseMimeType,
+        useSearchGrounding: initialSettings.useSearchGrounding === undefined ? DEFAULT_APP_SETTINGS.useSearchGrounding : initialSettings.useSearchGrounding,
     };
     if (processEnvApiKey && mergedSettings.geminiApiKeySource === 'env' && !initialSettings.userGeminiApiKey) {
       // Preserve empty user key if env is source

@@ -132,6 +132,14 @@ export interface DvachSessionCookies {
   usercode: string | null; // Dvach also sets a 'usercode' cookie
 }
 
+export type AutonomousBotReplyMode = 'replies_to_bot' | 'random_in_thread' /* | 'keyword_based' // Future */;
+export type AutonomousBotPersonalityPreset = 
+  | 'default' 
+  | 'concise_witty' 
+  | 'elaborate_detailed' 
+  | 'slightly_aggressive' 
+  | 'sarcastic_ironic';
+
 export interface AppSettings {
   board: string;
   threadId: string; // Current thread ID user is interacting with
@@ -151,20 +159,24 @@ export interface AppSettings {
   geminiAnalyzeAnonMedia: boolean; // Whether Gemini should consider media in non-OP posts
   geminiReplyWithGeneratedImage: boolean; // Whether Gemini should attempt to generate an image with its reply
   
-  autoMonitorDvachThreadForGemini: boolean; // General toggle, actual bot activity controlled by bot panel
+  // Autonomous Bot specific settings
   autonomousBotTargetBoard: string;
   autonomousBotTargetThreadId: string;
   autonomousBotSystemPrompt: string;
   botAnalyzesImagesInTriggerPosts: boolean; // Specific to autonomous bot
+  autonomousBotReplyMode: AutonomousBotReplyMode;
+  autonomousBotCycleIntervalSeconds: number; // Interval in seconds
+  autonomousBotPersonalityPreset: AutonomousBotPersonalityPreset;
 
-  // Gemini Model Configuration
-  geminiSystemInstruction: string; // Default system instruction for manual replies/general chat
+
+  // Gemini Model Configuration (Mainly for manual replies now, bot uses its own system prompt + preset)
+  geminiSystemInstruction: string; // Default system instruction for manual replies
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
   geminiMaxOutputTokens: number;
-  geminiResponseMimeType: 'text/plain' | 'application/json'; // For generic Gemini text generation
-  useSearchGrounding: boolean; // For generic Gemini text generation
+  geminiResponseMimeType: 'text/plain' | 'application/json';
+  useSearchGrounding: boolean;
   useThinkingBudget: boolean; // If false, thinkingBudget is 0
   geminiThinkingBudget: number; // In milliseconds, 0 disables it (for gemini-2.5-flash-preview-04-17)
 
@@ -221,26 +233,24 @@ export interface CustomGenerateContentResponse extends GeminiGenerateContentResp
    candidates?: (Candidate & { groundingMetadata?: GroundingMetadata })[];
 }
 
-
-// For Gemini thread analysis result
-export interface GeminiThreadAnalysis {
-  summary: string;
-  mainTopics: string[];
-  commonSentiments: string[];
-  keyDiscussions: string[]; // e.g., "Post >>123 started a debate about X"
-  replyAngles: string[]; // Suggested ways to reply or topics to engage with
-}
-
 // For ongoing Gemini-Dvach conversations (Autonomous Bot)
 export interface GeminiDvachConversation {
   id: string; // Unique conversation ID, e.g., board-threadId-triggerPostNum
   board: string;
   threadId: string;
   triggerPostNum: string; // The Dvach post number that initiated this specific bot interaction branch
-  botSystemPrompt: string; // System prompt active for this conversation
+  botSystemPromptUsed: string; // System prompt (including personality modifications) active for this conversation when it started/last replied
   geminiChatInstance: GeminiChat; // Stored chat instance for this specific conversation branch
   history: ChatMessage[]; // History specific to this conversation branch
   lastCheckedTimestamp: number; // When this specific conversation branch was last updated by checking Dvach
-  participatingPostNumbers: string[]; // All Dvach post numbers involved in this branch
+  participatingPostNumbers: string[]; // All Dvach post numbers involved in this branch (bot and user)
   status: 'active' | 'dormant' | 'ended_by_bot' | 'error'; // Status of the conversation
+}
+
+export interface GeminiThreadAnalysis {
+  summary: string;
+  mainTopics: string[];
+  commonSentiments: string[];
+  keyDiscussions: string[];
+  replyAngles: string[];
 }
