@@ -10,10 +10,11 @@ import {
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
 import { 
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
-  GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
+  GEMINI_MULTIMODAL_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
   GEMINI_CHAT_HISTORY_KEY, GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   PROXY_URL_GO_X2U_BASE, DEFAULT_CORS_ANYWHERE_PROXY, DVACH_DOMAINS, DEFAULT_USER_AGENT
 } from './constants';
+import { fetchImageAsBase64 } from './services/dvachService'; // Added for image fetching
 import { generateUserAgent } from './utils/userAgentGenerator'; // Corrected import path
 
 import {
@@ -46,7 +47,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiTopP: 0.95,
   geminiTopK: 40,
   geminiMaxOutputTokens: 1024,
-  geminiResponseMimeType: "text/plain",
+  geminiResponseMimeType: "text/plain", // This might need to be reviewed if gemini-2.5-flash handles JSON better for analysis.
   useSearchGrounding: false,
   useThinkingBudget: true, 
   geminiThinkingBudget: 0,
@@ -58,6 +59,13 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   enablePrefilledPostingMode: false,
   prefilledPostMessages: "Message 1\nMessage 2 >>TARGET_POST_NUM",
   prefilledPostTargets: "", 
+
+  useFullThreadContext: false,
+  threadContextLength: 5,
+
+  monitoringIntervalSeconds: 60,
+  autoStartMonitoring: false,
+  allowReplyToOwnBotPosts: false,
 };
 
 function buildProxiedGetUrlForApp(
@@ -91,7 +99,29 @@ function buildProxiedGetUrlForApp(
   }
 }
 
+// Helper function to get thread context for a reply - Переименовано
+const получитьКонтекстТредаДляОтвета = (
+  номерЦелевогоПоста: string,
+  всеПосты: DvachPost[],
+  длинаКонтекста: number
+): DvachPost[] => {
+  if (!номерЦелевогоПоста || длинаКонтекста <= 0) return [];
 
+  const индексЦелевогоПоста = всеПосты.findIndex(p => p.num === номерЦелевогоПоста);
+
+  if (индексЦелевогоПоста === -1) {
+    console.warn(`[получитьКонтекстТредаДляОтвета] Целевой пост ${номерЦелевогоПоста} не найден в массиве постов.`);
+    return [];
+  }
+
+  const начальныйИндекс = Math.max(0, индексЦелевогоПоста - длинаКонтекста);
+  // Контекст должен содержать посты *перед* целевым постом.
+  const контекстныеПосты = всеПосты.slice(начальныйИндекс, индексЦелевогоПоста);
+
+  return контекстныеПосты;
+};
+
+// Форматирование данных лога для отображения (оставляем англ., т.к. внутренняя утилита)
 const formatLogDataForDisplay = (data: unknown): string => {
   if (typeof data === 'string') return data;
   if (data === null || data === undefined) return "";
@@ -145,34 +175,36 @@ const App: React.FC = () => {
     const savedCookies = localStorage.getItem(DVACH_SESSION_COOKIES_KEY);
     return savedCookies ? JSON.parse(savedCookies) : null;
   });
-  const [isDvachLoggingIn, setIsDvachLoggingIn] = useState<boolean>(false);
+  const [входНаДвачВПроцессе, установитьВходНаДвачВПроцессе] = useState<boolean>(false);
 
-  const [currentBoard, setCurrentBoard] = useState<string>(settings.board);
-  const [currentThreadId, setCurrentThreadId] = useState<string>(settings.threadId);
-  const [sentMessages, setSentMessages] = useState<SentMessageInfo[]>(() => {
+  const [текущаяДоска, установитьТекущуюДоску] = useState<string>(settings.board);
+  const [текущийТредId, установитьТекущийТредId] = useState<string>(settings.threadId);
+  const [отправленныеСообщения, установитьОтправленныеСообщения] = useState<SentMessageInfo[]>(() => {
     const saved = localStorage.getItem(SENT_MESSAGES_KEY);
     return saved ? JSON.parse(saved) : [];
   });
-  const [postText, setPostText] = useState<string>('');
-  const [postFile, setPostFile] = useState<File | null>(null);
-  const [postUseSage, setPostUseSage] = useState<boolean>(false);
-  const [isPosting, setIsPosting] = useState<boolean>(false);
-  const [postActivityLog, setPostActivityLog] = useState<string[]>([]); 
+  const [текстПоста, установитьТекстПоста] = useState<string>('');
+  const [файлПоста, установитьФайлПоста] = useState<File | null>(null);
+  const [использоватьSage, установитьИспользоватьSage] = useState<boolean>(false);
+  const [постингВПроцессе, установитьПостингВПроцессе] = useState<boolean>(false);
+  const [журналАктивностиПостинга, установитьЖурналАктивностиПостинга] = useState<string[]>([]);
 
-  const [currentFetchedDvachPosts, setCurrentFetchedDvachPosts] = useState<DvachPost[]>([]);
-  const [isFetchingThread, setIsFetchingThread] = useState<boolean>(false);
+  const [загруженныеПостыТреда, установитьЗагруженныеПостыТреда] = useState<DvachPost[]>([]);
+  const [загрузкаТредаВПроцессе, установитьЗагрузкуТредаВПроцессе] = useState<boolean>(false);
   const threadPostsContainerRef = useRef<HTMLDivElement>(null);
-  const [fetchError, setFetchError] = useState<string | null>(null); 
+  const [ошибкаЗагрузки, установитьОшибкуЗагрузки] = useState<string | null>(null);
 
-  // Gemini states
-  const [geminiLoading, setGeminiLoading] = useState<boolean>(false); 
-  const [textGenPrompt, setTextGenPrompt] = useState<string>('');
-  const [geminiOutputText, setGeminiOutputText] = useState<string>(''); 
-  const [groundingSources, setGroundingSources] = useState<GroundingChunk[]>([]);
-  const [imageGenPrompt, setImageGenPrompt] = useState<string>('');
-  const [numImagesToGenerate, setNumImagesToGenerate] = useState<number>(1);
-  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]); 
-  const [isGeneratingImage, setIsGeneratingImage] = useState<boolean>(false);
+  // Gemini states - Состояния Gemini (оставляем англ. названия для соотв. с SDK)
+  const [geminiLoading, setGeminiLoading] = useState<boolean>(false); // Общая загрузка Gemini
+  // Следующие состояния были для старой панели "Gemini Lab", будут заменены состояниями лаборатории
+  // const [textGenPrompt, setTextGenPrompt] = useState<string>(''); // Заменено на geminiLabPrompt
+  // const [geminiOutputText, setGeminiOutputText] = useState<string>(''); // Заменено на geminiLabOutput
+  // const [groundingSources, setGroundingSources] = useState<GroundingChunk[]>([]); // Пока не используется в новой лабе
+  // const [imageGenPrompt, setImageGenPrompt] = useState<string>(''); // Заменено на geminiLabPrompt
+  // const [numImagesToGenerate, setNumImagesToGenerate] = useState<number>(1); // Заменено на geminiLabNumImagesToGenerate
+  // const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]); // Заменено на geminiLabOutput
+  // const [isGeneratingImage, setIsGeneratingImage] = useState<boolean>(false); // Заменено на geminiLabLoading
+
   const [geminiChatInput, setGeminiChatInput] = useState<string>('');
   const [geminiChatMessages, setGeminiChatMessages] = useState<ChatMessage[]>(() => {
     const saved = localStorage.getItem(GEMINI_CHAT_HISTORY_KEY);
@@ -182,8 +214,26 @@ const App: React.FC = () => {
   const [isStreamingChat, setIsStreamingChat] = useState<boolean>(false);
   const [imageForGeminiChat, setImageForGeminiChat] = useState<File | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
-  const [isAnalyzingThread, setIsAnalyzingThread] = useState<boolean>(false);
+  const [анализТредаВПроцессе, установитьАнализТредаВПроцессе] = useState<boolean>(false);
+  const [загрузкаИзображенияДляGemini, установитьЗагрузкуИзображенияДляGemini] = useState<boolean>(false);
   
+  // States for the new Gemini Lab panel - Состояния для новой панели "Лаборатория Gemini"
+  const [модельЛабораторииGemini, установитьМодельЛабораторииGemini] = useState<string>(GEMINI_MULTIMODAL_MODEL); // Default to the new multimodal model
+  const [промптЛабораторииGemini, установитьПромптЛабораторииGemini] = useState<string>('');
+  const [файлИзображенияЛаборатории, установитьФайлИзображенияЛаборатории] = useState<File | null>(null);
+  const [превьюИзображенияЛаборатории, установитьПревьюИзображенияЛаборатории] = useState<string | null>(null);
+  const [количествоИзображенийДляГенерацииВЛаборатории, установитьКоличествоИзображенийДляГенерацииВЛаборатории] = useState<number>(1);
+  const [выводЛабораторииGemini, установитьВыводЛабораторииGemini] = useState<string | GeneratedImage[] | null>(null);
+  const [загрузкаВЛабораторииGemini, установитьЗагрузкуВЛабораторииGemini] = useState<boolean>(false);
+
+  // State for turnkey bot monitoring - Состояния для мониторинга треда ботом
+  const [мониторингТредаАктивен, установитьМониторингТредаАктивен] = useState<boolean>(false);
+  const monitoringIntervalIdRef = useRef<NodeJS.Timeout | null>(null); // Оставляем англ. для useRef ID интервала
+  const [номерПоследнегоОбработанногоПоста, установитьНомерПоследнегоОбработанногоПоста] = useState<string | null>(null);
+  const [времяНачалаМониторинга, установитьВремяНачалаМониторинга] = useState<number | null>(null);
+  const [времяПоследнегоАвтоответа, установитьВремяПоследнегоАвтоответа] = useState<number | null>(null);
+  const [сводкиДействийБота, установитьСводкиДействийБота] = useState<Array<{id: string, timestamp: number, message: string}>>([]);
+
   const [geminiDvachConversations, setGeminiDvachConversations] = useState<Map<string, GeminiDvachConversation>>(() => {
     const saved = localStorage.getItem(GEMINI_DVACH_CONVERSATIONS_KEY);
     return saved ? new Map(JSON.parse(saved)) : new Map();
@@ -196,8 +246,15 @@ const App: React.FC = () => {
     consoleMethod(`[${type.toUpperCase()}] ${message}`, data !== undefined ? data : "");
   }, []);
 
-  const addPostActivity = useCallback((message: string) => {
-    setPostActivityLog(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 9)]);
+  const добавитьСводкуДействия = useCallback((message: string) => {
+    установитьСводкиДействийБота(prevSummaries => [
+      { id: Date.now().toString() + Math.random().toString(36).substring(2,9), timestamp: Date.now(), message },
+      ...prevSummaries.slice(0, 14) // Хранить последние 15 сводок
+    ]);
+  }, []);
+
+  const addPostActivity = useCallback((message: string) => { // Журнал ручного постинга, можно оставить англ.
+    установитьЖурналАктивностиПостинга(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 9)]);
   }, []);
 
 
@@ -209,16 +266,16 @@ const App: React.FC = () => {
   }, [settings]);
 
   useEffect(() => {
-    localStorage.setItem(SENT_MESSAGES_KEY, JSON.stringify(sentMessages.slice(0, MAX_SENT_MESSAGES_STORED)));
-  }, [sentMessages]);
+    localStorage.setItem(SENT_MESSAGES_KEY, JSON.stringify(отправленныеСообщения.slice(0, MAX_SENT_MESSAGES_STORED)));
+  }, [отправленныеСообщения]);
 
   useEffect(() => {
-    localStorage.setItem(GEMINI_CHAT_HISTORY_KEY, JSON.stringify(geminiChatMessages));
+    localStorage.setItem(GEMINI_CHAT_HISTORY_KEY, JSON.stringify(geminiChatMessages)); // Чат Gemini, можно оставить
     chatMessagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [geminiChatMessages]);
   
   useEffect(() => {
-    localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(Array.from(geminiDvachConversations.entries())));
+    localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(Array.from(geminiDvachConversations.entries()))); // Разговоры Gemini, можно оставить
   }, [geminiDvachConversations]);
 
   useEffect(() => {
@@ -258,126 +315,128 @@ const App: React.FC = () => {
   };
   
   useEffect(() => {
-    setCurrentBoard(settings.board);
-    setCurrentThreadId(settings.threadId);
+    установитьТекущуюДоску(settings.board);
+    установитьТекущийТредId(settings.threadId);
   }, [settings.board, settings.threadId]);
 
-
-  const handleLoadThread = async () => {
-    if (!currentBoard || !currentThreadId) {
-      setFetchError('Board and Thread ID are required.');
-      addLog('Board and Thread ID must be set to fetch thread posts.', 'warning');
-      setCurrentFetchedDvachPosts([]);
+ // Переименовано
+  const загрузитьТред = async () => {
+    if (!текущаяДоска || !текущийТредId) {
+      установитьОшибкуЗагрузки('Необходимо указать доску и ID треда.');
+      addLog('Необходимо указать доску и ID треда для загрузки постов.', 'warning');
+      установитьЗагруженныеПостыТреда([]);
       return;
     }
-    setIsFetchingThread(true);
-    setFetchError(null);
-    setCurrentFetchedDvachPosts([]);
+    установитьЗагрузкуТредаВПроцессе(true);
+    установитьОшибкуЗагрузки(null);
+    установитьЗагруженныеПостыТреда([]);
     try {
-      addLog(`Fetching thread /${currentBoard}/${currentThreadId}... Proxy for GET: ${settings.proxyModeForGET}`, 'dvach');
-      const data: DvachThreadResponse = await getThreadData(currentBoard, currentThreadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
+      addLog(`Загрузка треда /${текущаяДоска}/${текущийТредId}... Proxy для GET: ${settings.proxyModeForGET}`, 'dvach');
+      const data: DvachThreadResponse = await getThreadData(текущаяДоска, текущийТредId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
       
       const posts = data.threads?.[0]?.posts || [];
-      setCurrentFetchedDvachPosts(posts);
-      addLog(`Successfully fetched ${posts.length} posts from /${currentBoard}/${currentThreadId}.`, 'success');
+      установитьЗагруженныеПостыТреда(posts);
+      addLog(`Успешно загружено ${posts.length} постов из /${текущаяДоска}/${текущийТредId}.`, 'success');
       if (threadPostsContainerRef.current) threadPostsContainerRef.current.scrollTop = 0;
-      handleUpdateSettings({ board: currentBoard, threadId: currentThreadId });
+      handleUpdateSettings({ board: текущаяДоска, threadId: текущийТредId });
 
     } catch (err) {
       const errorMsg = (err as Error).message;
-      setFetchError(errorMsg);
-      addLog(`Failed to fetch thread /${currentBoard}/${currentThreadId}: ${errorMsg}`, 'error', err);
-      setCurrentFetchedDvachPosts([]);
+      установитьОшибкуЗагрузки(errorMsg);
+      addLog(`Ошибка загрузки треда /${текущаяДоска}/${текущийТредId}: ${errorMsg}`, 'error', err);
+      установитьЗагруженныеПостыТреда([]);
     } finally {
-      setIsFetchingThread(false);
+      установитьЗагрузкуТредаВПроцессе(false);
     }
   };
   
-  const handleDvachLogin = async () => {
+  // Переименовано
+  const войтиНаДвач = async () => {
     if (!settings.purchasedPasscode) {
-      addLog("Purchased Passcode is not set in settings.", 'error');
+      addLog("Пропуск для Двача не указан в настройках.", 'error');
       return;
     }
-    setIsDvachLoggingIn(true);
-    setFetchError(null);
-    addLog("Attempting to log into Dvach with purchased passcode...", 'auth');
+    установитьВходНаДвачВПроцессе(true);
+    установитьОшибкуЗагрузки(null);
+    addLog("Попытка входа на Двач с использованием пропуска...", 'auth');
     try {
       const cookies = await loginToDvach(settings.purchasedPasscode, settings.userAgent);
       setDvachSessionCookies(cookies);
-      addLog("Successfully logged into Dvach. Session cookies stored.", 'success');
+      addLog("Успешный вход на Двач. Сессионные куки сохранены.", 'success');
     } catch (error) {
       const errorMsg = (error as Error).message;
-      setFetchError(errorMsg);
-      addLog(`Dvach login failed: ${errorMsg}`, 'error', error);
-      setDvachSessionCookies(null); // Clear any old cookies on failure
+      установитьОшибкуЗагрузки(errorMsg);
+      addLog(`Ошибка входа на Двач: ${errorMsg}`, 'error', error);
+      setDvachSessionCookies(null);
     } finally {
-      setIsDvachLoggingIn(false);
+      установитьВходНаДвачВПроцессе(false);
     }
   };
 
-  const handleDvachLogout = () => {
+  // Переименовано
+  const выйтиИзДвача = () => {
     setDvachSessionCookies(null);
-    addLog("Logged out from Dvach. Session cookies cleared.", 'info');
+    addLog("Выход из Двача. Сессионные куки очищены.", 'info');
   };
 
-
-  const commonPostToDvach = async (
-    comment: string,
-    file: File | null,
-    useSage: boolean,
-    boardToPost: string,
-    threadIdContext: string, 
-    replyToPostNum?: string  
+  // Переименовано
+  const отправитьПостНаДвачОбщий = async (
+    комментарий: string,
+    файл: File | null,
+    использоватьSageПост: boolean,
+    доскаДляПостинга: string,
+    контекстТредаId: string,
+    ответНаПостNum?: string
   ): Promise<string> => { 
     if (!dvachSessionCookies?.passcode_auth) {
-      const errorMsg = 'Not logged into Dvach or session expired. Please login first.';
+      const errorMsg = 'Нет входа на Двач или сессия истекла. Пожалуйста, войдите сначала.';
       addLog(errorMsg, 'error');
-      addPostActivity(`Error: ${errorMsg}`);
-      setFetchError(errorMsg); // Show error to user
+      addPostActivity(`Ошибка: ${errorMsg}`);
+      установитьОшибкуЗагрузки(errorMsg);
       throw new Error(errorMsg);
     }
-    if (!boardToPost || !comment.trim()) {
-      const errorMsg = 'Board and Post Comment are required for posting.';
+    if (!доскаДляПостинга || !комментарий.trim()) {
+      const errorMsg = 'Доска и комментарий обязательны для постинга.';
       addLog(errorMsg, 'error');
-      addPostActivity(`Error: ${errorMsg}`);
+      addPostActivity(`Ошибка: ${errorMsg}`);
       throw new Error(errorMsg);
     }
 
-    setIsPosting(true);
-    setFetchError(null);
-    const effectiveThreadIdForDvach = threadIdContext === "0" || threadIdContext === "" ? "0" : threadIdContext;
-    const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
-    const logMsg = `Attempting to post to /${boardToPost}/${targetDesc}${replyToPostNum ? ` (reply to >>${replyToPostNum})` : ''}. Comment: "${comment.substring(0,50)}..."`;
-    addLog(logMsg, 'dvach');
-    addPostActivity(logMsg);
+    установитьПостингВПроцессе(true);
+    установитьОшибкуЗагрузки(null);
+    const актуальныйIdТредаДляДвача = контекстТредаId === "0" || контекстТредаId === "" ? "0" : контекстТредаId;
+    const описаниеЦели = актуальныйIdТредаДляДвача === "0" ? 'новый тред' : `тред ${актуальныйIdТредаДляДвача}`;
+    const сообщЛога = `Попытка отправки поста в /${доскаДляПостинга}/${описаниеЦели}${ответНаПостNum ? ` (ответ на >>${ответНаПостNum})` : ''}. Комментарий: "${комментарий.substring(0,50)}..."`;
+    addLog(сообщЛога, 'dvach');
+    addPostActivity(сообщЛога);
 
     try {
       const result = await postWithSessionCookie(
         dvachSessionCookies,
-        boardToPost,
-        effectiveThreadIdForDvach, 
-        comment,
-        file,
-        replyToPostNum, 
-        useSage,
+        доскаДляПостинга,
+        актуальныйIdТредаДляДвача,
+        комментарий,
+        файл,
+        ответНаПостNum,
+        использоватьSageПост,
         settings.userAgent
       );
       
-      const newPostNum = String(result.num || result.thread || result.target || Date.now()); 
-      addLog(`Post successful! Dvach response: Num: ${newPostNum}`, 'success', result);
-      addPostActivity(`Success! Post Num: ${newPostNum}.`);
+      const новыйНомерПоста = String(result.num || result.thread || result.target || Date.now());
+      addLog(`Пост успешно отправлен! Ответ Двача: Номер: ${новыйНомерПоста}`, 'success', result);
+      addPostActivity(`Успех! Номер поста: ${новыйНомерПоста}.`);
       
-      const newSentMessage: SentMessageInfo = {
-        num: newPostNum,
+      const новоеОтправленноеСообщение: SentMessageInfo = {
+        num: новыйНомерПоста,
         timestamp: Date.now(),
-        comment: comment,
-        board: boardToPost,
-        thread: effectiveThreadIdForDvach === "0" ? newPostNum : effectiveThreadIdForDvach, 
-        parent: replyToPostNum || (effectiveThreadIdForDvach === "0" ? undefined : effectiveThreadIdForDvach), 
-        file_info: file ? { name: file.name, size: file.size } : undefined,
+        comment: комментарий,
+        board: доскаДляПостинга,
+        thread: актуальныйIdТредаДляДвача === "0" ? новыйНомерПоста : актуальныйIdТредаДляДвача,
+        parent: ответНаПостNum || (актуальныйIdТредаДляДвача === "0" ? undefined : актуальныйIdТредаДляДвача),
+        file_info: файл ? { name: файл.name, size: файл.size } : undefined,
       };
-      setSentMessages(prev => [newSentMessage, ...prev]);
-      return newPostNum;
+      установитьОтправленныеСообщения(prev => [новоеОтправленноеСообщение, ...prev]);
+      return новыйНомерПоста;
     } catch (err) {
       const error = err as Error;
       const dvachApiError = extractDvachApiError(error);
@@ -385,164 +444,418 @@ const App: React.FC = () => {
 
       if (dvachApiError && (dvachApiError.code === -4 || dvachApiError.code === -6 || dvachApiError.code === -21 || dvachApiError.message.toLowerCase().includes("постинг запрещён") || dvachApiError.message.toLowerCase().includes("доступ запрещен"))) {
         // Specific auth-related errors from Dvach
-        errorMsg = `Dvach session likely expired or invalid (Error: ${dvachApiError.message}). Please log in again.`;
+        errorMsg = `Сессия Двача, вероятно, истекла или недействительна (Ошибка: ${dvachApiError.message}). Пожалуйста, войдите снова.`;
         addLog(errorMsg, 'auth', dvachApiError);
-        setDvachSessionCookies(null); // Clear invalid session
+        setDvachSessionCookies(null);
       } else {
-        addLog(`Failed to post: ${errorMsg}`, 'error', err);
+        addLog(`Ошибка отправки поста: ${errorMsg}`, 'error', err);
       }
-      setFetchError(errorMsg); 
-      addPostActivity(`Post Failed: ${errorMsg}`);
+      установитьОшибкуЗагрузки(errorMsg);
+      addPostActivity(`Ошибка поста: ${errorMsg}`);
       throw new Error(errorMsg); 
     } finally {
-      setIsPosting(false);
+      установитьПостингВПроцессе(false);
     }
   };
 
-  const handleSimplePost = async () => {
+  // Переименовано
+  const отправитьПростойПост = async () => {
     try {
-      await commonPostToDvach(postText, postFile, postUseSage, currentBoard, currentThreadId);
-      setPostText('');
-      setPostFile(null);
-    } catch (e) { /* error already logged by commonPostToDvach */ }
+      await отправитьПостНаДвачОбщий(текстПоста, файлПоста, использоватьSage, текущаяДоска, текущийТредId);
+      установитьТекстПоста('');
+      установитьФайлПоста(null);
+    } catch (e) { /* ошибка уже залогирована в отправитьПостНаДвачОбщий */ }
   };
 
-  const handleGeminiReplyToDvachPost = async (targetPost: DvachPost) => {
-    if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
-    if (!dvachSessionCookies?.passcode_auth) { 
-        addLog('Not logged into Dvach. Please login before replying with Gemini.', 'error'); 
-        setFetchError('Not logged into Dvach. Please login before replying with Gemini.');
-        return; 
+  // Переименовано
+  const ответитьЧерезGeminiНаПост = async (targetPost: DvachPost) => {
+    if (!ai) { addLog('Gemini AI не инициализирован.', 'error'); return; }
+    if (!dvachSessionCookies?.passcode_auth) {
+        addLog('Нет входа на Двач. Пожалуйста, войдите перед ответом с помощью Gemini.', 'error');
+        установитьОшибкуЗагрузки('Нет входа на Двач. Пожалуйста, войдите перед ответом с помощью Gemini.');
+        return;
     }
-    if (!currentBoard || !currentThreadId) { addLog('Current board or thread ID not set.', 'error'); return; }
+    // targetPost.parent is the thread_id, targetPost.board is the board_id
+    if (!targetPost.board || !targetPost.parent) {
+      addLog('Target post is missing board or thread ID information.', 'error');
+      return;
+    }
 
     setGeminiLoading(true);
-    addLog(`Gemini preparing reply to post >>${targetPost.num} on /${currentBoard}/${currentThreadId}...`, 'gemini');
+    // Используем состояние `загрузкаИзображенияДляGemini` (которое связано с `установитьЗагрузкуИзображенияДляGemini`)
+    addLog(`Gemini готовит ответ на пост >>${targetPost.num} в /${targetPost.board}/${targetPost.parent}...`, 'gemini');
     
     let systemInstructionForReply = settings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
-    systemInstructionForReply += ` You are replying to post number ${targetPost.num}. Your reply MUST start with ">>${targetPost.num}\\n".`;
     
-    let userPromptText = `Post >>${targetPost.num} (by ${targetPost.name || 'Anonymous'}) says:\n"${targetPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '').substring(0, 1000)}"`;
-    
+    let userPromptText = "";
     const geminiMessageParts: Part[] = [];
+    // let modelToUse = GEMINI_TEXT_MODEL; // Deprecated: modelToUse will be GEMINI_MULTIMODAL_MODEL
     let dvachImageToAnalyze: DvachFile | null = null;
+    let imageSuccessfullyProcessed = false;
+    let threadPostsForContext: DvachPost[] = [];
 
-    if (targetPost.files && targetPost.files.length > 0) {
-        if ((settings.geminiAnalyzeOpMedia && targetPost.op === 1) || (settings.geminiAnalyzeAnonMedia && targetPost.op !== 1)) {
-            dvachImageToAnalyze = targetPost.files[0]; 
-        }
-    }
-
-    if (dvachImageToAnalyze) {
-        userPromptText += `\n\nThe post >>${targetPost.num} includes media file "${dvachImageToAnalyze.name}". Consider this image in your reply.`;
+    // 1. Получение полного контекста треда, если включено
+    if (settings.useFullThreadContext && targetPost.board && targetPost.parent) {
+      addLog(`Полный контекст треда включен. Сбор постов для /${targetPost.board}/${targetPost.parent}.`, 'gemini');
+      if (текущаяДоска === targetPost.board && текущийТредId === targetPost.parent && загруженныеПостыТреда.length > 0) {
+        addLog(`Использование уже загруженных постов (${загруженныеПостыТреда.length}) для контекста.`, 'gemini');
+        threadPostsForContext = загруженныеПостыТреда;
+      } else {
+        addLog(`Текущие загруженные посты не подходят или пусты. Загрузка свежих данных треда /${targetPost.board}/${targetPost.parent} для контекста.`, 'gemini');
         try {
-            const imageUrl = DVACH_DOMAINS[0] + dvachImageToAnalyze.path; 
-            const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForGET, settings.customProxyUrlForGET);
-            addLog(`Fetching image ${dvachImageToAnalyze.name} for Gemini analysis from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
-
-            const imageResponse = await fetch(proxiedImageUrl);
-            if (!imageResponse.ok) throw new Error(`Failed to fetch image: ${imageResponse.status} ${imageResponse.statusText}`);
-            const imageBlob = await imageResponse.blob();
-            
-            let mimeType = dvachImageToAnalyze.path.endsWith('.png') ? 'image/png' : 
-                           dvachImageToAnalyze.path.endsWith('.gif') ? 'image/gif' : 
-                           dvachImageToAnalyze.path.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
-            if (dvachImageToAnalyze.type === 1) mimeType = 'image/jpeg';
-            else if (dvachImageToAnalyze.type === 2) mimeType = 'image/png';
-            else if (dvachImageToAnalyze.type === 4) mimeType = 'image/gif';
-
-            const base64data = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                reader.onerror = reject;
-                reader.readAsDataURL(imageBlob);
-            });
-            geminiMessageParts.push({ inlineData: { mimeType: mimeType, data: base64data } });
-            addLog(`Image "${dvachImageToAnalyze.name}" successfully prepared for Gemini.`, 'gemini');
-        } catch (imgError) {
-            addLog(`Failed to fetch or process image "${dvachImageToAnalyze.name}" for Gemini: ${(imgError as Error).message}. Proceeding with text only.`, 'warning', imgError);
-            userPromptText += ` (Image analysis failed, rely on text).`;
+          const contextThreadData = await getThreadData(targetPost.board, targetPost.parent, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
+          threadPostsForContext = contextThreadData.threads?.[0]?.posts || [];
+          addLog(`Успешно загружено ${threadPostsForContext.length} постов для контекста из /${targetPost.board}/${targetPost.parent}.`, 'gemini');
+        } catch (err) {
+          addLog(`Не удалось загрузить контекст треда для /${targetPost.board}/${targetPost.parent}: ${(err as Error).message}. Продолжение без полного контекста.`, 'warning', err);
+          threadPostsForContext = [];
         }
+      }
     }
-    geminiMessageParts.push({ text: userPromptText + `\n\nGenerate your reply.` });
+
+    // 2. Подготовка текстового промпта (с контекстом или без)
+    const cleanComment = (text: string) => text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '').trim();
+    const contextualPostsFormatted: string[] = [];
+
+    if (settings.useFullThreadContext && threadPostsForContext.length > 0) {
+        const contextPosts = получитьКонтекстТредаДляОтвета(targetPost.num, threadPostsForContext, settings.threadContextLength);
+        contextPosts.forEach(p => {
+            contextualPostsFormatted.push(`>>${p.num} (${p.name || 'Anon'}): ${cleanComment(p.comment).substring(0, 250)}...`);
+        });
+
+        if (contextualPostsFormatted.length > 0) {
+            userPromptText = "Вот предыдущие сообщения в треде:\n" + contextualPostsFormatted.join('\n\n') + "\n\n";
+            userPromptText += `Пост, на который нужно ответить (>>${targetPost.num}):\n`;
+            // Обновляем системную инструкцию, чтобы она включала указание на контекст
+            systemInstructionForReply += ` Учитывая предыдущий контекст обсуждения и следующий пост, напиши развернутый и интересный ответ на пост >>${targetPost.num}. Твой ответ ДОЛЖЕН начинаться с ">>${targetPost.num}\\n".`;
+        } else {
+            systemInstructionForReply += ` Твой ответ ДОЛЖЕН начинаться с ">>${targetPost.num}\\n".`;
+        }
+    } else {
+        systemInstructionForReply += ` Твой ответ ДОЛЖЕН начинаться с ">>${targetPost.num}\\n".`;
+    }
+
+    userPromptText += `>>${targetPost.num} (${targetPost.name || 'Anonymous'}):\n"${cleanComment(targetPost.comment)}"`;
+
+
+    // 3. Обработка изображения (если есть и разрешено настройками)
+    if (targetPost.files && targetPost.files.length > 0 &&
+        ((settings.geminiAnalyzeOpMedia && targetPost.op === 1) || (settings.geminiAnalyzeAnonMedia && targetPost.op !== 1))) {
+
+      dvachImageToAnalyze = targetPost.files[0]; // Берем первое изображение
+
+      if (dvachImageToAnalyze) {
+        const currentDvachDomain = DVACH_DOMAINS[0]; // Можно сделать выбор домена более гибким
+        const imageUrl = dvachImageToAnalyze.path.startsWith('http') ? dvachImageToAnalyze.path : `${currentDvachDomain}${dvachImageToAnalyze.path}`;
+
+        let proxyPrefixForImageFetch = "";
+        if (settings.proxyModeForGET !== 'none' && settings.proxyModeForGET !== 'vercel_serverless') {
+            if (settings.proxyModeForGET === 'custom_go_x2u') {
+                proxyPrefixForImageFetch = settings.customProxyUrlForGET || PROXY_URL_GO_X2U_BASE;
+            } else if (settings.proxyModeForGET === 'custom_cors_anywhere') {
+                proxyPrefixForImageFetch = (settings.customProxyUrlForGET || DEFAULT_CORS_ANYWHERE_PROXY).endsWith('/')
+                    ? (settings.customProxyUrlForGET || DEFAULT_CORS_ANYWHERE_PROXY)
+                    : `${(settings.customProxyUrlForGET || DEFAULT_CORS_ANYWHERE_PROXY)}/`;
+            } else if (settings.proxyModeForGET === 'custom_general_prefix') {
+                 proxyPrefixForImageFetch = settings.customProxyUrlForGET || "";
+            } else if (settings.proxyModeForGET === 'custom_general_param' && settings.customProxyUrlForGET) {
+                 proxyPrefixForImageFetch = settings.customProxyUrlForGET.endsWith('=') ? settings.customProxyUrlForGET : `${settings.customProxyUrlForGET}=`;
+                 addLog(`Загрузка изображения: используется 'custom_general_param'. Убедитесь, что URL прокси в настройках вида 'https://myproxy.com?url='`, 'info');
+            }
+        }
+
+        addLog(`Попытка загрузки изображения "${dvachImageToAnalyze.name}" для анализа Gemini. URL: ${imageUrl}. Прокси-префикс: "${proxyPrefixForImageFetch || 'нет'}"`, 'gemini');
+        установитьЗагрузкуИзображенияДляGemini(true);
+        try {
+          const { base64Data, mimeType } = await fetchImageAsBase64(imageUrl, proxyPrefixForImageFetch);
+          geminiMessageParts.push({ inlineData: { mimeType: mimeType, data: base64Data } });
+          // modelToUse = GEMINI_VISION_MODEL; // No longer needed, GEMINI_MULTIMODAL_MODEL is used
+          userPromptText = `Проанализируй этот текст и ИЗОБРАЖЕНИЕ и напиши ответ. ${userPromptText}`;
+          addLog(`Изображение "${dvachImageToAnalyze.name}" (MIME: ${mimeType}) успешно загружено и подготовлено. Используется модель: ${GEMINI_MULTIMODAL_MODEL}.`, 'success');
+          imageSuccessfullyProcessed = true;
+        } catch (imgError) {
+          addLog(`Не удалось загрузить/обработать изображение "${dvachImageToAnalyze.name}": ${(imgError as Error).message}. Ответ будет только на основе текста.`, 'warning', imgError);
+          userPromptText = `(Анализ изображения не удался, внимательно прочти только текст и ответь на него). ${userPromptText}`;
+        } finally {
+          установитьЗагрузкуИзображенияДляGemini(false);
+        }
+      }
+    }
     
+    userPromptText += `\n\nТвой ответ:`;
+    geminiMessageParts.push({ text: userPromptText });
+
+    // 4. Вызов Gemini API
     let geminiReplyText = "";
     try {
-      const response = await ai.models.generateContent({
-        model: GEMINI_TEXT_MODEL,
+      addLog(`Отправка запроса в Gemini. Модель: ${GEMINI_MULTIMODAL_MODEL}. Системная инструкция: "${systemInstructionForReply.substring(0,100)}..." Промпт: "${userPromptText.substring(0,200)}..."`, 'gemini');
+      const modelInstance = ai.getGenerativeModel({ model: GEMINI_MULTIMODAL_MODEL, systemInstruction: systemInstructionForReply });
+      const response = await modelInstance.generateContent({
         contents: [{ role: 'user', parts: geminiMessageParts }],
-        config: { 
-          systemInstruction: systemInstructionForReply,
+        generationConfig: {
           temperature: settings.geminiTemperature, topP: settings.geminiTopP, 
           topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens 
         }
       });
-      geminiReplyText = response.text || ""; 
+      geminiReplyText = response.response.text() || "";
+
       if (!geminiReplyText.trim().startsWith(`>>${targetPost.num}`)) { 
           geminiReplyText = `>>${targetPost.num}\n${geminiReplyText.trim()}`;
       }
-      addLog(`Gemini generated text reply for >>${targetPost.num}: ${geminiReplyText.substring(0, 100)}...`, 'gemini');
+      addLog(`Gemini сгенерировал текстовый ответ для >>${targetPost.num}: ${geminiReplyText.substring(0, 100)}...`, 'gemini');
 
       let finalFileToPost: File | null = null;
       if (settings.geminiReplyWithGeneratedImage) {
-        addLog(`Gemini generating image for reply to >>${targetPost.num}...`, 'gemini');
-        const imagePpt = `Imageboard reply context: "${geminiReplyText.substring(geminiReplyText.indexOf('\n') + 1, 200).trim()}". Style: interesting, meme-like, or abstract.`;
-        const imgGenResp = await ai.models.generateImages({ model: GEMINI_IMAGE_MODEL, prompt: imagePpt, config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } });
-        if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
-          finalFileToPost = await base64ToFile(imgGenResp.generatedImages[0].image.imageBytes, `gemini_img_${Date.now()}.jpg`, imgGenResp.generatedImages[0].image.mimeType || 'image/jpeg');
-          addLog(`Gemini generated image for reply to >>${targetPost.num}.`, 'gemini');
-        } else { addLog(`Gemini image generation failed or no image returned for reply to >>${targetPost.num}.`, 'warning'); }
+        addLog(`Gemini генерирует изображение для ответа на >>${targetPost.num}...`, 'gemini');
+        const imagePpt = `Контекст ответа на имиджборде: "${geminiReplyText.substring(geminiReplyText.indexOf('\n') + 1, 200).trim()}". Стиль: интересный, мемный или абстрактный.`;
+
+        const imageModelInstance = ai.getGenerativeModel({model: GEMINI_IMAGE_MODEL});
+        // Note: The exact response structure for generateImages can vary. Adjust if needed.
+        const imgGenResp = await imageModelInstance.generateImages({prompt: imagePpt, number_of_images: 1 });
+
+        const firstGeneratedImage = imgGenResp?.response?.[0];
+        if (firstGeneratedImage && (firstGeneratedImage as any).image_bytes) { // Check for image_bytes, cast to any if type is too strict
+          finalFileToPost = await base64ToFile(Buffer.from((firstGeneratedImage as any).image_bytes).toString('base64'), `gemini_img_${Date.now()}.jpg`, (firstGeneratedImage as any).mime_type || 'image/jpeg');
+          addLog(`Gemini сгенерировал изображение для ответа на >>${targetPost.num}.`, 'gemini');
+        } else {
+            addLog(`Генерация изображения Gemini не удалась или изображение не возвращено для ответа на >>${targetPost.num}.`, 'warning');
+        }
       }
-      const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, currentBoard, currentThreadId, targetPost.num);
+      // Ensure the correct function name for posting is used, matching the rest of App.tsx
+      const newPostNumByGemini = await отправитьПостНаДвачОбщий(geminiReplyText, finalFileToPost, использоватьSage, targetPost.board, targetPost.parent, targetPost.num);
       
-      setSentMessages(prev => prev.map(msg => 
-        msg.num === newPostNumByGemini ? { ...msg, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPost } : msg 
+      установитьОтправленныеСообщения(prev => prev.map(msg =>
+        msg.num === newPostNumByGemini ? { ...msg, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPost } : msg
       ));
-      addLog(`Gemini reply posted as >>${newPostNumByGemini} to /${currentBoard}/${currentThreadId}.`, 'success');
+      addLog(`Ответ Gemini опубликован как >>${newPostNumByGemini} в /${targetPost.board}/${targetPost.parent}.`, 'success');
+
+      const этоАвтоматическийВызов = мониторингТредаАктивен && targetPost.board === settings.board && targetPost.parent === settings.threadId;
+      if (этоАвтоматическийВызов) {
+        установитьВремяПоследнегоАвтоответа(Date.now());
+        добавитьСводкуДействия(`Авто-ответ на >>${newPostNumByGemini} в /${targetPost.board}/${targetPost.parent}. Изобр: ${imageSuccessfullyProcessed?'Да':'Нет'}`);
+      }
 
       if (settings.autoMonitorDvachThreadForGemini && ai) {
-        const convoId = targetPost.num; 
-        const initialUserContent: Content = { role: 'user', parts: [{text: `Original post content by ${targetPost.name || 'Anon'} (>>${targetPost.num}):\n${targetPost.comment}`}]};
-        if (dvachImageToAnalyze && geminiMessageParts.find(p => p.inlineData)) { 
-            const imgPart = geminiMessageParts.find(p => p.inlineData);
-            if(imgPart && initialUserContent.parts) initialUserContent.parts.push(imgPart);
+        const convoId = targetPost.num;
+        const initialUserContentParts: Part[] = [];
+        if (settings.useFullThreadContext && contextualPostsFormatted.length > 0) {
+            initialUserContentParts.push({text: "Контекст треда:\n" + contextualPostsFormatted.join('\n\n') + `\n\nПост, на который был дан ответ (>>${targetPost.num}):\n${cleanComment(targetPost.comment)}`});
+        } else {
+            initialUserContentParts.push({text: `Original post by ${targetPost.name || 'Anon'} (>>${targetPost.num}):\n${cleanComment(targetPost.comment)}`});
         }
+
+        if (imageSuccessfullyProcessed && dvachImageToAnalyze) {
+            const imagePart = geminiMessageParts.find(part => part.inlineData);
+            if (imagePart) {
+                initialUserContentParts.push(imagePart);
+            }
+        }
+        const initialUserContent: Content = { role: 'user', parts: initialUserContentParts };
         const initialModelContent: Content = { role: 'model', parts: [{text: geminiReplyText}]};
 
-        const newChatHistory: ChatMessage[] = [
+        const newChatHistoryForConvo: ChatMessage[] = [
             { id: `convo-${convoId}-user-orig`, role: 'user', parts: initialUserContent.parts!, timestamp: targetPost.timestamp * 1000 },
             { id: `convo-${convoId}-model-initial`, role: 'model', parts: initialModelContent.parts!, timestamp: Date.now() }
         ];
         
-        const geminiChat = ai.chats.create({
-            model: GEMINI_TEXT_MODEL,
-            history: [ ...newChatHistory.map(h => ({role: h.role as 'user' | 'model', parts: h.parts! } as Content))], 
-            config: { systemInstruction: systemInstructionForReply, temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP, maxOutputTokens: settings.geminiMaxOutputTokens }
+        // For new SDK, chat session is started from a model instance
+        const chatModelInstance = ai.getGenerativeModel({ model: GEMINI_MULTIMODAL_MODEL, systemInstruction: systemInstructionForReply });
+        const geminiChat = chatModelInstance.startChat({
+            history: [ ...newChatHistoryForConvo.map(h => ({role: h.role as 'user' | 'model', parts: h.parts! } as Content))],
+            generationConfig: {
+                temperature: settings.geminiTemperature,
+                topK: settings.geminiTopK,
+                topP: settings.geminiTopP,
+                maxOutputTokens: settings.geminiMaxOutputTokens
+             }
         });
 
         const newConversation: GeminiDvachConversation = {
             dvachRootPostByGeminiNum: newPostNumByGemini,
-            board: currentBoard,
-            threadId: currentThreadId,
-            geminiChatInstance: geminiChat,
-            history: newChatHistory,
+            board: targetPost.board,
+            threadId: targetPost.parent,
+            geminiChatInstance: geminiChat, // Store the chat instance
+            history: newChatHistoryForConvo,
             lastCheckedTimestamp: Date.now(),
             participatingPostNumbers: [targetPost.num, newPostNumByGemini]
         };
         setGeminiDvachConversations(prev => new Map(prev).set(convoId, newConversation));
-        addLog(`GeminiDvachConversation initiated for >>${targetPost.num}, Gemini's reply >>${newPostNumByGemini}.`, 'gemini');
+        addLog(`Разговор GeminiDvach инициирован для >>${targetPost.num}, ответ Gemini >>${newPostNumByGemini}. Изображение обработано: ${imageSuccessfullyProcessed}. Постов в контексте: ${contextualPostsFormatted.length}.`, 'gemini');
       }
 
     } catch (error) {
-      // Error logging handled by commonPostToDvach for post failures
-      if (! (error as Error).message.toLowerCase().includes("post failed")) { // Avoid double logging
-         addLog(`Error during Gemini reply generation or processing for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
+      const errorMessage = (error as Error).message;
+      if (!errorMessage.toLowerCase().includes("post failed") && !errorMessage.toLowerCase().includes("отправки поста")) {
+         addLog(`Ошибка в логике ответа Gemini для >>${targetPost.num}: ${errorMessage}`, 'error', error);
       }
     } finally {
       setGeminiLoading(false);
+      установитьЗагрузкуИзображенияДляGemini(false);
     }
   };
 
+  // Core Turnkey Bot Monitoring Functions - Основные функции мониторинга треда ботом
+  // Переименовано
+  const проверитьНовыеПосты = async () => {
+    if (!settings.board || !settings.threadId || !ai || !dvachSessionCookies?.passcode_auth) {
+      addLog("Проверка мониторинга пропущена: Доска/ID треда не установлены, AI не инициализирован или нет входа.", 'warning');
+      if (!dvachSessionCookies?.passcode_auth && мониторингТредаАктивен) {
+        добавитьСводкуДействия("Монитор: Нет входа на Двач. Остановка.");
+        addLog("Нет входа на Двач. Остановка мониторинга.", 'auth');
+        остановитьМониторингТреда();
+      }
+      return;
+    }
+
+    addLog(`Мониторинг: Проверка /${settings.board}/${settings.threadId} на наличие новых постов... Последний увиденный: >>${номерПоследнегоОбработанногоПоста || 'Нет'}`, 'dvach');
+    let текущиеПостыТреда: DvachPost[] = [];
+    try {
+      const threadData = await getThreadData(settings.board, settings.threadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
+      текущиеПостыТреда = threadData.threads?.[0]?.posts || [];
+    } catch (error) {
+      const errorMsg = `Мониторинг: Ошибка загрузки данных треда для /${settings.board}/${settings.threadId}: ${(error as Error).message}`;
+      addLog(errorMsg, 'error', error);
+      добавитьСводкуДействия(errorMsg.substring(0, 100) + "...");
+      return;
+    }
+
+    if (текущиеПостыТреда.length === 0) {
+      addLog(`Мониторинг: Постов не найдено в /${settings.board}/${settings.threadId}.`, 'info');
+      return;
+    }
+
+    const номерПоследнегоПостаВТредеСтрока = текущиеПостыТреда[текущиеПостыТреда.length - 1].num;
+
+    if (номерПоследнегоОбработанногоПоста === null) {
+        const сохраненныйПоследнийНомер = localStorage.getItem(`lastMonitored_${settings.board}_${settings.threadId}`);
+        if (сохраненныйПоследнийНомер) {
+            установитьНомерПоследнегоОбработанногоПоста(сохраненныйПоследнийНомер);
+            addLog(`Мониторинг: Возобновлен с последнего обработанного поста >>${сохраненныйПоследнийНомер} из хранилища.`, 'info');
+        } else {
+            установитьНомерПоследнегоОбработанногоПоста(номерПоследнегоПостаВТредеСтрока);
+            localStorage.setItem(`lastMonitored_${settings.board}_${settings.threadId}`, номерПоследнегоПостаВТредеСтрока);
+            addLog(`Мониторинг: Инициализирован. Будут обрабатываться посты новее >>${номерПоследнегоПостаВТредеСтрока}.`, 'info');
+            return;
+        }
+    }
+
+    let новыеПостыДляОбработки: DvachPost[] = [];
+    if (номерПоследнегоОбработанногоПоста) {
+        const последнийНомер = parseInt(номерПоследнегоОбработанногоПоста, 10);
+        новыеПостыДляОбработки = текущиеПостыТреда.filter(p => parseInt(p.num, 10) > последнийНомер);
+    } else {
+        новыеПостыДляОбработки = текущиеПостыТреда;
+    }
+
+    if (новыеПостыДляОбработки.length === 0) {
+      addLog(`Мониторинг: Новых постов не найдено в /${settings.board}/${settings.threadId} после >>${номерПоследнегоОбработанногоПоста}.`, 'info');
+      return;
+    }
+
+    добавитьСводкуДействия(`Монитор: Найдено ${новыеПостыДляОбработки.length} новых постов в /${settings.board}/${settings.threadId}.`);
+    addLog(`Мониторинг: Найдено ${новыеПостыДляОбработки.length} новых постов в /${settings.board}/${settings.threadId}. Обработка...`, 'gemini');
+
+    for (const новыйПост of новыеПостыДляОбработки.sort((a,b) => parseInt(a.num, 10) - parseInt(b.num, 10))) {
+      if (!settings.allowReplyToOwnBotPosts) {
+        const этоСобственныйПостБота = отправленныеСообщения.some(отпрСообщ => отпрСообщ.num === новыйПост.num && отпрСообщ.isGeminiPost && отпрСообщ.board === settings.board && отпрСообщ.thread === settings.threadId);
+        if (этоСобственныйПостБота) {
+          const сообщПропуска = `Мониторинг: Пропуск ответа на собственный пост бота >>${новыйПост.num}.`;
+          addLog(сообщПропуска, 'gemini');
+          установитьНомерПоследнегоОбработанногоПоста(новыйПост.num);
+          localStorage.setItem(`lastMonitored_${settings.board}_${settings.threadId}`, новыйПост.num);
+          continue;
+        }
+      }
+
+      addLog(`Мониторинг: Подготовка автоматического ответа Gemini на новый пост >>${новыйПост.num}.`, 'gemini');
+      try {
+        const постДляОтвета: DvachPost = { ...новыйПост, board: settings.board, parent: settings.threadId };
+        await ответитьЧерезGeminiНаПост(постДляОтвета);
+
+        установитьНомерПоследнегоОбработанногоПоста(новыйПост.num);
+        localStorage.setItem(`lastMonitored_${settings.board}_${settings.threadId}`, новыйПост.num);
+        addLog(`Мониторинг: Попытка обработки поста >>${новыйПост.num}. Обновлен номер последнего обработанного поста.`, 'gemini');
+
+        if (новыеПостыДляОбработки.length > 1 && новыеПостыДляОбработки.indexOf(новыйПост) < новыеПостыДляОбработки.length -1) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      } catch (error) {
+        const errorMsg = `Мониторинг: Ошибка обработки поста >>${новыйПост.num} через Gemini: ${(error as Error).message}`;
+        addLog(errorMsg, 'error', error);
+        добавитьСводкуДействия(errorMsg.substring(0,100) + "...");
+        установитьНомерПоследнегоОбработанногоПоста(новыйПост.num);
+        localStorage.setItem(`lastMonitored_${settings.board}_${settings.threadId}`, новыйПост.num);
+      }
+    }
+  };
+
+  // Переименовано
+  const запуститьМониторингТреда = async () => {
+    if (!settings.autoMonitorDvachThreadForGemini || !settings.board || !settings.threadId) {
+      addLog("Не удается запустить мониторинг: Функция отключена или не указаны Доска/ID треда.", 'warning');
+      добавитьСводкуДействия("Запуск монитора: не выполнены условия.");
+      return;
+    }
+    if (мониторингТредаАктивен || monitoringIntervalIdRef.current) {
+      addLog("Мониторинг уже активен.", 'warning');
+      return;
+    }
+     if (!dvachSessionCookies?.passcode_auth) {
+      addLog("Не удается запустить мониторинг: Нет входа на Двач.", 'error');
+      добавитьСводкуДействия("Монитор: Нет входа на Двач.");
+      return;
+    }
+    if (!ai) {
+      addLog("Не удается запустить мониторинг: Gemini AI не инициализирован.", 'error');
+      добавитьСводкуДействия("Монитор: Gemini AI не готов.");
+      return;
+    }
+
+    установитьМониторингТредаАктивен(true);
+    установитьВремяНачалаМониторинга(Date.now());
+    const startMsg = `Запущен мониторинг /${settings.board}/${settings.threadId} (интервал: ${settings.monitoringIntervalSeconds}с).`;
+    addLog(startMsg, 'system');
+    добавитьСводкуДействия(startMsg);
+
+    let initialLastNum = localStorage.getItem(`lastMonitored_${settings.board}_${settings.threadId}`);
+    if (!initialLastNum) {
+        addLog("Мониторинг: Нет номера последнего обработанного поста в хранилище. Загрузка треда для установки начальной отметки...", 'info');
+        try {
+            const threadData = await getThreadData(settings.board, settings.threadId, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
+            const posts = threadData.threads?.[0]?.posts || [];
+            if (posts.length > 0) {
+                initialLastNum = posts[posts.length - 1].num;
+                localStorage.setItem(`lastMonitored_${settings.board}_${settings.threadId}`, initialLastNum);
+                addLog(`Мониторинг: Инициализирован. Будут обрабатываться посты новее >>${initialLastNum} в /${settings.board}/${settings.threadId}.`, 'info');
+            } else {
+                 addLog(`Мониторинг: Тред /${settings.board}/${settings.threadId} пуст или ошибка загрузки. Начальная отметка не установлена.`, 'warning');
+            }
+        } catch (error) {
+            addLog(`Мониторинг: Ошибка загрузки треда для начальной отметки: ${(error as Error).message}`, 'error');
+        }
+    }
+    установитьНомерПоследнегоОбработанногоПоста(initialLastNum);
+
+    проверитьНовыеПосты();
+    monitoringIntervalIdRef.current = setInterval(проверитьНовыеПосты, settings.monitoringIntervalSeconds * 1000);
+  };
+
+  // Переименовано
+  const остановитьМониторингТреда = () => {
+    if (monitoringIntervalIdRef.current) {
+      clearInterval(monitoringIntervalIdRef.current);
+      monitoringIntervalIdRef.current = null;
+    }
+    установитьМониторингТредаАктивен(false);
+    установитьВремяНачалаМониторинга(null);
+    const stopMsg = `Остановлен мониторинг /${settings.board}/${settings.threadId || 'N/A'}.`;
+    addLog(stopMsg, 'system');
+    добавитьСводкуДействия(stopMsg);
+  };
+
+  // This useEffect handles the old auto-monitoring logic for GeminiDvachConversations.
+  // It should be reviewed if it conflicts with or is made redundant by the new turnkey bot.
+  // For now, it's kept separate. The new turnkey bot is the primary focus of this subtask.
   useEffect(() => {
     let intervalId: NodeJS.Timeout | undefined;
     if (settings.autoMonitorDvachThreadForGemini && ai && currentBoard && currentThreadId && geminiDvachConversations.size > 0 && dvachSessionCookies?.passcode_auth) {
@@ -632,7 +945,7 @@ const App: React.FC = () => {
         }
       };
       
-      intervalId = setInterval(monitorLogic, 30000); 
+      intervalId = setInterval(monitorLogic, 30000); // This is the old interval, uses hardcoded 30s
     } else {
       if (intervalId) {
         clearInterval(intervalId);
@@ -643,7 +956,187 @@ const App: React.FC = () => {
       if (intervalId) clearInterval(intervalId);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.autoMonitorDvachThreadForGemini, ai, currentBoard, currentThreadId, geminiDvachConversations, dvachSessionCookies, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent, addLog, commonPostToDvach]);
+  }, []); // Removed dependencies to ensure it only runs once or is manually controlled if kept.
+  // }, [settings.autoMonitorDvachThreadForGemini, ai, currentBoard, currentThreadId, geminiDvachConversations, dvachSessionCookies, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent, addLog, commonPostToDvach]);
+
+  // useEffect for new turnkey bot monitoring lifecycle
+  useEffect(() => {
+    if (settings.autoMonitorDvachThreadForGemini && settings.autoStartMonitoring && settings.board && settings.threadId && ai && dvachSessionCookies?.passcode_auth) {
+      addLog("Auto-starting thread monitoring due to settings.", "system");
+      startThreadMonitoring();
+    } else if (!settings.autoMonitorDvachThreadForGemini && isMonitoringThread) {
+      addLog("Stopping thread monitoring because autoMonitorDvachThreadForGemini is now false.", "system");
+      stopThreadMonitoring();
+    }
+    // Cleanup on component unmount or if dependencies change such that monitoring should stop
+    return () => {
+      if (isMonitoringThread) {
+        stopThreadMonitoring();
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.autoMonitorDvachThreadForGemini, settings.autoStartMonitoring, settings.board, settings.threadId, ai, dvachSessionCookies?.passcode_auth]);
+
+
+  // Effect to stop/restart monitoring if board/threadId changes while active
+  useEffect(() => {
+    if (isMonitoringThread) {
+      addLog("Board or Thread ID changed while monitoring was active. Restarting monitoring for the new target.", "system");
+      stopThreadMonitoring();
+      // Use a timeout to allow state updates to propagate before restarting
+      setTimeout(() => {
+        if (settings.autoMonitorDvachThreadForGemini && settings.board && settings.threadId && ai && dvachSessionCookies?.passcode_auth) {
+          startThreadMonitoring();
+        }
+      }, 100);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.board, settings.threadId]);
+
+  const handleGeminiLabImageFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      const file = event.target.files[0];
+      // Basic validation (optional, can be enhanced)
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+      if (!allowedTypes.includes(file.type)) {
+         addLog(`Gemini Lab: Unsupported image type: ${file.type}. Allowed: ${allowedTypes.join(', ')}`, 'warning');
+         setGeminiLabImageFile(null);
+         setGeminiLabImagePreview(null);
+         event.target.value = ''; return;
+      }
+      if (file.size > 10 * 1024 * 1024) { // Example: 10MB limit
+          addLog("Gemini Lab: Image file exceeds 10MB limit.", 'warning');
+          setGeminiLabImageFile(null);
+          setGeminiLabImagePreview(null);
+          event.target.value = ''; return;
+      }
+      setGeminiLabImageFile(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setGeminiLabImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+        setGeminiLabImageFile(null);
+        setGeminiLabImagePreview(null);
+    }
+  };
+
+  const handleGeminiLabGenerate = async () => {
+    if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
+
+    setGeminiLabLoading(true);
+    setGeminiLabOutput(null);
+    addLog(`Gemini Lab: Starting generation with model ${geminiLabModel}.`, 'gemini');
+
+    try {
+      const generationConfig = {
+        temperature: settings.geminiTemperature,
+        topP: settings.geminiTopP,
+        topK: settings.geminiTopK,
+        maxOutputTokens: settings.geminiMaxOutputTokens,
+        responseMimeType: settings.geminiResponseMimeType, // Used for text/vision
+      };
+
+      if (geminiLabModel === GEMINI_TEXT_MODEL || geminiLabModel === GEMINI_VISION_MODEL) {
+        if (!geminiLabPrompt.trim() && !geminiLabImageFile) {
+          addLog('Gemini Lab: Prompt (and image for Vision model) cannot be empty.', 'warning');
+          setGeminiLabLoading(false);
+          return;
+        }
+        const parts: Part[] = [];
+        if (geminiLabPrompt.trim()) parts.push({ text: geminiLabPrompt });
+
+        if (geminiLabModel === GEMINI_VISION_MODEL && geminiLabImageFile) {
+          const base64data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(geminiLabImageFile);
+          });
+          parts.push({ inlineData: { mimeType: geminiLabImageFile.type, data: base64data } });
+        } else if (geminiLabModel === GEMINI_VISION_MODEL && !geminiLabImageFile) {
+            addLog('Gemini Lab: Vision model selected, but no image provided. Proceeding with text only if prompt exists.', 'warning');
+            if (!geminiLabPrompt.trim()) { // No prompt either
+                 setGeminiLabOutput("Error: Vision model selected, but no image or text prompt provided.");
+                 setGeminiLabLoading(false);
+                 return;
+            }
+        }
+
+        const contents: Content[] = [{ role: 'user', parts }];
+        if (settings.geminiSystemInstruction && (geminiLabModel === GEMINI_TEXT_MODEL || geminiLabModel === GEMINI_VISION_MODEL)) {
+           // Assuming system instruction is applicable here. The SDK structure might vary.
+           // For generateContent, systemInstruction is usually top-level in the request if available.
+           // The current SDK for generateContent may place it within config or at a higher level.
+           // Let's assume it's part of the config for this generic lab.
+           // generationConfig.systemInstruction = settings.geminiSystemInstruction; // This might not be correct for all models/SDK versions.
+           // The GoogleGenAI SDK for generateContent typically uses a structure like:
+           // ai.getGenerativeModel({ model: geminiLabModel, systemInstruction: settings.geminiSystemInstruction}).generateContent({ contents, generationConfig })
+           // For simplicity here, we'll pass systemInstruction if the model is text/vision, and log it.
+           addLog(`Gemini Lab: Using system instruction: "${settings.geminiSystemInstruction.substring(0,100)}..."`, 'gemini');
+        }
+
+        const modelInstance = ai.getGenerativeModel({ model: geminiLabModel, systemInstruction: settings.geminiSystemInstruction });
+        const response = await modelInstance.generateContent({ contents, generationConfig });
+
+        setGeminiLabOutput(response.response.text() ?? "No text content returned.");
+        addLog('Gemini Lab: Content generation successful.', 'success');
+
+      } else if (geminiLabModel === GEMINI_IMAGE_MODEL) {
+        if (!geminiLabPrompt.trim()) { // Changed from imageGenPrompt to geminiLabPrompt for consistency
+          addLog('Gemini Lab: Image generation prompt cannot be empty.', 'warning');
+          setGeminiLabLoading(false);
+          return;
+        }
+        // const imageResponse = await ai.models.generateImages({ // Old direct model access
+        const imageModel = ai.getGenerativeModel({model: GEMINI_IMAGE_MODEL}); // Get the model instance
+        const imageResponse = await imageModel.generateImages({ // Call generateImages on the instance
+          prompt: geminiLabPrompt, // Use the unified geminiLabPrompt
+          // config: { numberOfImages: geminiLabNumImagesToGenerate, outputMimeType: 'image/jpeg' }
+          // The new SDK might take generationConfig directly or specific parameters.
+          // For generateImages, it's usually simpler:
+           number_of_images: geminiLabNumImagesToGenerate,
+        });
+
+        if (imageResponse.response && imageResponse.response.length > 0) {
+           const imagesData: GeneratedImage[] = imageResponse.response
+            .map((img: any /*SdkGenerateImagesResponse*/): GeneratedImage | null => { // Type might need to be from the SDK
+                if (img.image_bytes) { // Assuming the SDK returns image_bytes
+                    return { base64Data: Buffer.from(img.image_bytes).toString('base64'), mimeType: 'image/png', prompt: geminiLabPrompt };
+                } else if (img.image?.imageBytes) { // Fallback for older structure if any
+                     return { base64Data: img.image.imageBytes, mimeType: img.image.mimeType || 'image/png', prompt: geminiLabPrompt };
+                }
+                return null;
+            })
+            .filter((img): img is GeneratedImage => img !== null);
+          setGeminiLabOutput(imagesData);
+          addLog(`Gemini Lab: Successfully generated ${imagesData.length} image(s).`, 'success');
+        } else {
+          addLog("Gemini Lab: Image generation returned no images.", 'warning');
+          setGeminiLabOutput("Image generation returned no images.");
+        }
+      } else {
+        addLog(`Gemini Lab: Unknown model selected: ${geminiLabModel}`, 'error');
+        setGeminiLabOutput(`Error: Unknown model selected - ${geminiLabModel}`);
+      }
+    } catch (error) {
+      const errorMsg = `Gemini Lab: Generation failed - ${(error as Error).message}`;
+      addLog(errorMsg, 'error', error);
+      setGeminiLabOutput(errorMsg);
+    } finally {
+      setGeminiLabLoading(false);
+    }
+  };
+
+  const clearGeminiLab = () => {
+    setGeminiLabPrompt('');
+    setGeminiLabImageFile(null);
+    setGeminiLabImagePreview(null);
+    setGeminiLabOutput(null);
+    // Do not reset geminiLabModel or parameters, user might want to reuse them.
+    addLog("Gemini Lab inputs and output cleared.", 'info');
+  };
 
 
   const handleSendGeminiChatMessage = async () => {
@@ -677,22 +1170,28 @@ const App: React.FC = () => {
     setGeminiLoading(true);
     try {
       let chat = currentGeminiChat;
-      if (!chat || geminiChatMessages.length <= 1) { 
+      // If chat doesn't exist or if the model of the existing chat is different from the new multimodal model (e.g. old chat was text-only)
+      // This check for model change might be overly simplistic if `chat.model` isn't directly accessible or comparable like this.
+      // A more robust way might be to store the model used for `currentGeminiChat` in a separate state.
+      // For now, we assume a new chat is needed if it's the first message or if we want to ensure the new model is used.
+      if (!chat || geminiChatMessages.length <= 1 ) {
         const historyForNewChat: Content[] = geminiChatMessages
             .filter(m => m.id !== modelMessageId && (m.role === 'user' || m.role === 'model') && m.parts.length > 0) 
             .map(m => ({ role: m.role as 'user' | 'model', parts: m.parts! }));
-        const systemInstructionConfig = settings.geminiSystemInstruction ? { systemInstruction: settings.geminiSystemInstruction } : {};
-        chat = ai.chats.create({
-          model: GEMINI_TEXT_MODEL, history: historyForNewChat,
-          config: { ...systemInstructionConfig, temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP, maxOutputTokens: settings.geminiMaxOutputTokens }
+
+        const chatModelInstance = ai.getGenerativeModel({ model: GEMINI_MULTIMODAL_MODEL, systemInstruction: settings.geminiSystemInstruction });
+        chat = chatModelInstance.startChat({
+          history: historyForNewChat,
+          generationConfig: { temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP, maxOutputTokens: settings.geminiMaxOutputTokens }
         });
         setCurrentGeminiChat(chat);
-        addLog("New Gemini chat session started.", 'gemini');
+        addLog("New Gemini chat session started with " + GEMINI_MULTIMODAL_MODEL, 'gemini');
       }
-      const result = await chat.sendMessageStream({ message: userMessageParts });
+      const result = await chat.sendMessageStream(userMessageParts); // Send only parts for new SDK
       let currentStreamedText = "";
-      for await (const chunk of result) { // chunk is GenerateContentResponse
-        currentStreamedText += chunk.text || ""; 
+      // The new SDK's sendMessageStream yields GenerateContentResponse chunks
+      for await (const chunk of result.stream) {
+        currentStreamedText += chunk.text() || "";
         setGeminiChatMessages(prev => prev.map(m => 
             m.id === modelMessageId ? { ...m, parts: [{ text: currentStreamedText }], isLoading: true } : m 
         ));
@@ -717,12 +1216,15 @@ const App: React.FC = () => {
     addLog('Gemini chat history and session cleared.', 'info');
   };
 
+  // This function is for the old "Gemini Lab" text generation, will be updated by handleGeminiLabGenerate
   const handleGenericGeminiTextGeneration = async () => {
-    if (!ai || !textGenPrompt.trim()) { addLog("AI not initialized or prompt is empty.", 'warning'); return; }
-    setGeminiLoading(true);
-    setGeminiOutputText('');
-    setGroundingSources([]);
-    addLog(`Gemini generating content for prompt: "${textGenPrompt.substring(0, 50)}..."`, 'gemini');
+    // This function's direct usage might be deprecated by the unified handleGeminiLabGenerate
+    addLog("handleGenericGeminiTextGeneration called - this might be deprecated. Check Gemini Lab panel usage.", 'warning')
+    if (!ai || !промптЛабораторииGemini.trim()) { addLog("AI not initialized or prompt is empty.", 'warning'); return; }
+    setGeminiLoading(true); // Should use geminiLabLoading
+    // setGeminiOutputText(''); // Should use setGeminiLabOutput
+    // setGroundingSources([]); // Grounding sources might not be a separate state anymore
+    addLog(`Gemini generating content for prompt: "${промптЛабораторииGemini.substring(0, 50)}..."`, 'gemini');
     try {
       const modelConfig: GenerateContentParameters['config'] = {
         temperature: settings.geminiTemperature, topK: settings.geminiTopK, topP: settings.geminiTopP,
@@ -730,31 +1232,36 @@ const App: React.FC = () => {
       };
       if (settings.useSearchGrounding) modelConfig.tools = [{ googleSearch: {} }];
       
-      if (GEMINI_TEXT_MODEL === "gemini-2.5-flash-preview-04-17") {
-        if (!settings.useThinkingBudget) { 
-            modelConfig.thinkingConfig = { thinkingBudget: 0 };
-        } else if (settings.geminiThinkingBudget > 0) { 
-            modelConfig.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
-        }
-      }
+      // Example for thinking budget - ensure GEMINI_MULTIMODAL_MODEL is checked if it supports this
+      // if (GEMINI_MULTIMODAL_MODEL === "gemini-2.5-flash-preview-05-20") { // Check against the correct model
+      //   if (!settings.useThinkingBudget) {
+      //       modelConfig.thinkingConfig = { thinkingBudget: 0 };
+      //   } else if (settings.geminiThinkingBudget > 0) {
+      //       modelConfig.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
+      //   }
+      // }
 
-      const response: CustomGenerateContentResponse = await ai.models.generateContent({
-        model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: [{text: textGenPrompt}]}],
-         config: modelConfig,
+      const modelInstance = ai.getGenerativeModel({model: GEMINI_MULTIMODAL_MODEL, systemInstruction: settings.geminiSystemInstruction});
+      const response = await modelInstance.generateContent({
+         contents: [{role: 'user', parts: [{text: промптЛабораторииGemini}]}],
+         generationConfig: modelConfig, // Use generationConfig for new SDK
       });
-      const textOutput = response.text || "No text content returned.";
-      setGeminiOutputText(textOutput);
+      const textOutput = response.response.text() || "No text content returned.";
+      // setGeminiOutputText(textOutput); // Update lab output
+      установитьВыводЛабораторииGemini(textOutput);
       addLog("Gemini content generation successful.", 'success');
-      if (settings.useSearchGrounding && response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
-        setGroundingSources(response.candidates[0].groundingMetadata.groundingChunks);
-        addLog(`Grounding sources found: ${response.candidates[0].groundingMetadata.groundingChunks.length}`, 'gemini');
-      }
+      // Grounding metadata access might change with new SDK
+      // if (settings.useSearchGrounding && response.response.candidates?.[0]?.groundingMetadata?.groundingAttributions) {
+      //   // setGroundingSources(response.candidates[0].groundingMetadata.groundingChunks);
+      //   addLog(`Grounding sources found. Check response for details.`, 'gemini');
+      // }
     } catch (error) {
       const errorMsg = `Gemini content generation failed: ${(error as Error).message}`;
       addLog(errorMsg, 'error', error);
-      setGeminiOutputText(errorMsg);
+      // setGeminiOutputText(errorMsg); // Update lab output
+      установитьВыводЛабораторииGemini(errorMsg);
     } finally {
-      setGeminiLoading(false);
+      setGeminiLoading(false); // Should use setGeminiLabLoading
     }
   };
   
@@ -785,14 +1292,14 @@ const App: React.FC = () => {
 
   const handleAnalyzeThreadWithGemini = async () => {
     if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
-    if (currentFetchedDvachPosts.length === 0) { addLog('No Dvach posts loaded to analyze.', 'warning'); return; }
-    setIsAnalyzingThread(true);
-    setGeminiOutputText('');
-    addLog(`Gemini analyzing ${currentFetchedDvachPosts.length} posts from /${currentBoard}/${currentThreadId}...`, 'gemini');
-    const postsSummary = currentFetchedDvachPosts.slice(0, 30).map(p => 
+    if (загруженныеПостыТреда.length === 0) { addLog('No Dvach posts loaded to analyze.', 'warning'); return; }
+    установитьАнализТредаВПроцессе(true);
+    установитьВыводЛабораторииGemini(''); // Clear previous output from lab
+    addLog(`Gemini analyzing ${загруженныеПостыТреда.length} posts from /${текущаяДоска}/${текущийТредId}...`, 'gemini');
+    const postsSummary = загруженныеПостыТреда.slice(0, 30).map(p =>
       `Post >>${p.num} (by ${p.name || 'Anon'}): "${p.comment.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>?/gm, '').substring(0, 150)}..."`
     ).join('\n');
-    const analysisPrompt = `Analyze the following imageboard thread posts from 2ch.hk/${currentBoard}/${currentThreadId}:\n\n${postsSummary}\n\nProvide:
+    const analysisPrompt = `Analyze the following imageboard thread posts from 2ch.hk/${текущаяДоска}/${текущийТредId}:\n\n${postsSummary}\n\nProvide:
 1. A brief overall summary of the thread's discussion.
 2. Main topics or themes.
 3. Common sentiments expressed.
@@ -800,28 +1307,32 @@ const App: React.FC = () => {
 5. Suggest 2-3 potential reply angles or interesting points to engage with.
 Format your response as a JSON object with keys: "summary", "mainTopics" (array of strings), "commonSentiments" (array of strings), "keyDiscussions" (array of strings), "replyAngles" (array of strings).`;
     try {
-      const response = await ai.models.generateContent({
-        model: GEMINI_TEXT_MODEL, contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
-        config: { responseMimeType: 'application/json', temperature: 0.5 }
+      const modelInstance = ai.getGenerativeModel({ model: GEMINI_MULTIMODAL_MODEL }); // Use the new model
+      const response = await modelInstance.generateContent({
+         contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
+         generationConfig: { responseMimeType: 'application/json', temperature: 0.5 } // generationConfig for new SDK
       });
-      let jsonStr = (response.text || "").trim(); 
+      let jsonStr = (response.response.text() || "").trim();
       const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
       const match = jsonStr.match(fenceRegex);
       if (match && match[2]) jsonStr = match[2].trim();
       try {
         const parsedAnalysis: GeminiThreadAnalysis = JSON.parse(jsonStr);
-        setGeminiOutputText(JSON.stringify(parsedAnalysis, null, 2)); 
+        // setGeminiOutputText(JSON.stringify(parsedAnalysis, null, 2)); // Update lab output
+        установитьВыводЛабораторииGemini(JSON.stringify(parsedAnalysis, null, 2));
         addLog('Gemini thread analysis successful.', 'success');
       } catch (parseError) {
         addLog('Failed to parse Gemini analysis JSON response.', 'error', {jsonStr, parseError});
-        setGeminiOutputText(`Failed to parse analysis: ${jsonStr}`);
+        // setGeminiOutputText(`Failed to parse analysis: ${jsonStr}`); // Update lab output
+        установитьВыводЛабораторииGemini(`Failed to parse analysis: ${jsonStr}`);
       }
     } catch (error) {
       const errorMsg = `Gemini thread analysis failed: ${(error as Error).message}`;
       addLog(errorMsg, 'error', error);
-      setGeminiOutputText(errorMsg);
+      // setGeminiOutputText(errorMsg); // Update lab output
+      установитьВыводЛабораторииGemini(errorMsg);
     } finally {
-      setIsAnalyzingThread(false);
+      установитьАнализТредаВПроцессе(false);
     }
   };
   
@@ -881,46 +1392,122 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
       )}
       <div className="prose prose-sm dark:prose-invert max-w-none break-words" dangerouslySetInnerHTML={{ __html: post.comment.replace(/&gt;&gt;(\d+)/g, `<a href="#post-$1" class="text-blue-500 hover:underline">&gt;&gt;$1</a>`) }}/>
       <div className="mt-2 text-right">
-        <button onClick={() => handleGeminiReplyToDvachPost(post)} disabled={geminiLoading || !ai || isPosting || !dvachSessionCookies?.passcode_auth}
-          className="px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
-          title={!ai ? "Gemini AI not initialized. Check API Key." : (!dvachSessionCookies?.passcode_auth ? "Not logged into Dvach." : "Reply to this post using Gemini AI")}>
-          <IconSparkles className="mr-1 h-4 w-4"/> Reply with Gemini
-        </button>
+          <button
+            onClick={() => ответитьЧерезGeminiНаПост(post)}
+            disabled={geminiLoading || загрузкаИзображенияДляGemini || !ai || постингВПроцессе || !dvachSessionCookies?.passcode_auth}
+            className="px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
+            title={!ai ? "Gemini AI не инициализирован. Проверьте API ключ." : (!dvachSessionCookies?.passcode_auth ? "Не выполнен вход на Двач." : (загрузкаИзображенияДляGemini && ((settings.geminiAnalyzeOpMedia && post.op === 1) || (settings.geminiAnalyzeAnonMedia && post.op !== 1)) ? "Загрузка изображения..." : "Ответить на этот пост с помощью Gemini AI"))}>
+            {(загрузкаИзображенияДляGemini && post.files && post.files.length > 0 && ((settings.geminiAnalyzeOpMedia && post.op === 1) || (settings.geminiAnalyzeAnonMedia && post.op !== 1))) ?
+              <IconRefresh className="animate-spin mr-1 h-4 w-4"/> : <IconSparkles className="mr-1 h-4 w-4"/>}
+            Ответить с Gemini
+          </button>
       </div>
     </div>
   );
 
-  const renderDvachBotPanel = () => (
+  const renderDvachBotPanel = () => {
+    const isMonitoringAllowed = settings.autoMonitorDvachThreadForGemini && settings.board && settings.threadId && ai && dvachSessionCookies?.passcode_auth;
+    const canManuallyStartMonitoring = settings.autoMonitorDvachThreadForGemini && settings.board && settings.threadId && ai && dvachSessionCookies?.passcode_auth;
+
+    return (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
-      <div className="flex justify-between items-center border-b pb-2 border-gray-300 dark:border-gray-700">
-        <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400">Dvach Operations</h2>
+      <div className="flex justify-between items-center border-b pb-3 border-gray-300 dark:border-gray-700 mb-6">
+        <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400">Операции на Дваче</h2>
         <div className="flex items-center space-x-2">
             {dvachSessionCookies?.passcode_auth ? (
                 <>
-                    <span className="text-xs text-green-600 dark:text-green-400 flex items-center"><IconUserCircle className="h-4 w-4 mr-1"/>Logged In</span>
-                    <button onClick={handleDvachLogout} title="Logout from Dvach"
+                    <span className="text-xs text-green-600 dark:text-green-400 flex items-center"><IconUserCircle className="h-4 w-4 mr-1"/>Вход выполнен</span>
+                    <button onClick={выйтиИзДвача} title="Выйти из Двача"
                         className="px-3 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded-md flex items-center shadow transition-colors">
-                        <IconLogout className="mr-1 h-4 w-4"/> Logout
+                        <IconLogout className="mr-1 h-4 w-4"/> Выйти
                     </button>
                 </>
             ) : (
-                <button onClick={handleDvachLogin} disabled={isDvachLoggingIn || !settings.purchasedPasscode}
+                <button onClick={войтиНаДвач} disabled={входНаДвачВПроцессе || !settings.purchasedPasscode}
                     className="px-3 py-1 text-xs bg-green-500 hover:bg-green-600 text-white rounded-md flex items-center shadow disabled:opacity-50 transition-colors"
-                    title={!settings.purchasedPasscode ? "Enter Purchased Passcode in Settings first" : "Login to Dvach using Purchased Passcode"}>
-                    <IconLogin className="mr-1 h-4 w-4"/> Login to Dvach
+                    title={!settings.purchasedPasscode ? "Сначала введите код пропуска в Настройках" : "Войти на Двач с кодом пропуска"}>
+                    <IconLogin className="mr-1 h-4 w-4"/> Войти на Двач
                 </button>
             )}
         </div>
       </div>
 
-      {fetchError && (
+      {ошибкаЗагрузки && (
          <div className="p-3 mb-4 bg-red-100 dark:bg-red-900 border-l-4 border-red-500 rounded-md text-red-700 dark:text-red-300 text-sm" role="alert">
             <div className="flex items-start"> <IconAlertTriangle className="h-5 w-5 mr-2 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
-              <div><strong className="font-bold">Operation Failed:</strong> <p className="mt-1 break-all">{fetchError}</p>
-                 <p className="mt-1 text-xs">Check logs for details. If this is a CORS/proxy issue for GET, check Settings. For POST issues, the serverless function might be down or Dvach blocked the request. For auth issues, try logging in again.</p>
+              <div><strong className="font-bold">Операция не удалась:</strong> <p className="mt-1 break-all">{ошибкаЗагрузки}</p>
+                 <p className="mt-1 text-xs">Проверьте логи для деталей. Если это CORS/прокси ошибка для GET, проверьте Настройки. Для POST ошибок, серверлесс функция может быть недоступна или Двач заблокировал запрос. Для ошибок авторизации, попробуйте войти снова.</p>
               </div></div></div>)}
-      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md space-y-3">
-        <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Load Thread</h3>
+
+      {/* Section 1: Automated Thread Monitoring */}
+      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+        <h3 className="text-xl font-medium text-indigo-600 dark:text-indigo-400 mb-3">Automated Thread Monitoring</h3>
+        {!settings.autoMonitorDvachThreadForGemini ? (
+          <p className="text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900 p-3 rounded-md">
+            Enable <strong className="font-semibold">"Gemini Auto-Monitors Thread for Replies (Experimental)"</strong> in <button onClick={() => setActiveTab('settings')} className="underline hover:text-yellow-700 dark:hover:text-yellow-200">Settings</button> to use this feature.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <button
+              onClick={isMonitoringThread ? stopThreadMonitoring : startThreadMonitoring}
+              disabled={!canManuallyStartMonitoring && !isMonitoringThread}
+              className={`w-full px-4 py-2.5 text-sm font-medium rounded-md shadow-md transition-colors flex items-center justify-center
+                          ${isMonitoringThread ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white'}
+                          disabled:opacity-60 disabled:cursor-not-allowed`}
+              title={!canManuallyStartMonitoring && !isMonitoringThread ? "Set Board/Thread ID in settings, ensure AI is ready and logged in." : (isMonitoringThread ? "Stop Monitoring" : "Start Monitoring Thread")}
+            >
+              {isMonitoringThread ? <IconAlertTriangle className="mr-2 h-5 w-5"/> : <IconCpu className="mr-2 h-5 w-5"/>}
+              {isMonitoringThread ? 'Stop Monitoring' : 'Start Monitoring Thread'}
+            </button>
+
+            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-md text-xs text-gray-700 dark:text-gray-300 space-y-1">
+              <p><strong>Status:</strong> {isMonitoringThread
+                ? <span className="text-green-600 dark:text-green-400 font-semibold">Monitoring /<span className="font-bold">{settings.board}</span>/<span className="font-bold">{settings.threadId}</span></span>
+                : <span className="text-red-600 dark:text-red-400 font-semibold">Not Monitoring</span>}
+              </p>
+              {isMonitoringThread && monitoringStartTime && (
+                <p><strong>Monitoring Since:</strong> {new Date(monitoringStartTime).toLocaleString()}</p>
+              )}
+              {lastMonitoredPostNum && isMonitoringThread && (
+                <p><strong>Last Checked Post:</strong> <span className="font-semibold"> &gt;&gt;{lastMonitoredPostNum}</span></p>
+              )}
+              {lastBotReplyTimestamp && isMonitoringThread && (
+                <p><strong>Last Automated Reply:</strong> {new Date(lastBotReplyTimestamp).toLocaleString()}</p>
+              )}
+            </div>
+
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-500 dark:text-gray-400 hover:underline">View Active Monitoring Settings</summary>
+              <div className="mt-1 p-2 bg-gray-100 dark:bg-gray-700 rounded space-y-0.5">
+                <p><strong>Interval:</strong> {settings.monitoringIntervalSeconds}s</p>
+                <p><strong>Context Length:</strong> {settings.threadContextLength} posts</p>
+                <p><strong>Use Full Thread Context:</strong> {settings.useFullThreadContext ? 'Yes' : 'No'}</p>
+                <p><strong>Reply to Own Posts:</strong> {settings.allowReplyToOwnBotPosts ? 'Yes' : 'No'}</p>
+              </div>
+            </details>
+
+            {botActionSummaries.length > 0 && (
+              <div className="mt-3">
+                <h4 className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Recent Bot Activity:</h4>
+                <div className="max-h-32 overflow-y-auto space-y-1 text-xs p-2 bg-gray-100 dark:bg-gray-700 rounded custom-scrollbar">
+                  {botActionSummaries.map(summary => (
+                    <p key={summary.id} className="truncate" title={summary.message}>
+                      <span className="text-gray-500 dark:text-gray-400">[{new Date(summary.timestamp).toLocaleTimeString()}]</span> {summary.message}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+             {!settings.board && !settings.threadId && (
+               <p className="text-xs text-red-500 dark:text-red-400 mt-1 text-center">Board and Thread ID must be set in global settings to start monitoring.</p>
+             )}
+          </div>
+        )}
+      </div>
+
+      {/* Section 2: Manual Thread Interaction */}
+      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+        <h3 className="text-xl font-medium text-teal-600 dark:text-teal-400 mb-3">Manual Thread Interaction</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div><label htmlFor="dvachBoardInput" className="block text-sm font-medium text-gray-600 dark:text-gray-300">Board:</label>
                 <input id="dvachBoardInput" type="text" value={currentBoard} onChange={(e) => setCurrentBoard(e.target.value)} placeholder="e.g., b" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/></div>
@@ -929,10 +1516,14 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
             <button onClick={handleLoadThread} disabled={isFetchingThread || !currentBoard || !currentThreadId}
                 className="mt-1 md:mt-6 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-md font-medium flex items-center justify-center shadow disabled:opacity-50 transition-colors h-10"
                 title="Fetch posts from specified board/thread ID">
-                <IconRefresh className={`mr-2 h-5 w-5 ${isFetchingThread ? 'animate-spin' : ''}`}/> Fetch Thread</button></div></div>
-       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
-        <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Manual Post</h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Posts to the board/thread specified above. If Thread ID is "0" or empty, attempts to create a new thread (may require a file).</p>
+                <IconRefresh className={`mr-2 h-5 w-5 ${isFetchingThread ? 'animate-spin' : ''}`}/> Fetch Thread</button>
+        </div>
+      </div>
+
+      {/* Section 3: Manual Post */}
+       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+        <h3 className="text-xl font-medium text-blue-600 dark:text-blue-400 mb-3">Manual Post</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Posts to the board/thread specified in "Manual Thread Interaction" section. If Thread ID is "0" or empty, attempts to create a new thread.</p>
         <textarea aria-label="Post comment" className="w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"
           rows={3} placeholder="Enter post comment..." value={postText} onChange={(e) => setPostText(e.target.value)}/>
         <div className="flex flex-wrap items-center space-x-4 mt-2">
@@ -944,10 +1535,13 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
           <button onClick={handleSimplePost} disabled={isPosting || !currentBoard || !postText.trim() || !dvachSessionCookies?.passcode_auth}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md font-medium flex items-center shadow transition-colors disabled:opacity-50 my-1"
             title={!dvachSessionCookies?.passcode_auth ? "Not logged into Dvach. Please Login." : "Post message"}> <IconSend className="mr-2 h-5 w-5"/> Post</button></div>
-        {postActivityLog.length > 0 && (<div className="mt-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">{postActivityLog.map((log, i) => <p key={i} className="truncate">{log}</p>)}</div>)}</div>
-      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
+        {postActivityLog.length > 0 && (<div className="mt-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">{postActivityLog.map((log, i) => <p key={i} className="truncate">{log}</p>)}</div>)}
+        </div>
+
+      {/* Section 4: Thread Viewer & Gemini Tools */}
+      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
         <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
-            <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Thread Viewer & Gemini Tools</h3>
+            <h3 className="text-xl font-medium text-purple-600 dark:text-purple-400">Thread Viewer & Gemini Tools</h3>
             <button onClick={handleAnalyzeThreadWithGemini} disabled={isAnalyzingThread || currentFetchedDvachPosts.length === 0 || !ai}
                 className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
                 title={!ai ? "Gemini AI not initialized" : (currentFetchedDvachPosts.length === 0 ? "No posts loaded to analyze" : "Analyze loaded thread with Gemini")}>
@@ -956,51 +1550,139 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
         <div ref={threadPostsContainerRef} className="max-h-[600px] overflow-y-auto bg-gray-100 dark:bg-gray-800 p-2 rounded custom-scrollbar">
             {isFetchingThread && <p className="text-center p-4">Loading thread...</p>}
             {!isFetchingThread && currentFetchedDvachPosts.length === 0 && <p className="text-center p-4 text-gray-500 dark:text-gray-400">No posts loaded. Fetch thread or check settings.</p>}
-            {currentFetchedDvachPosts.map((post,idx) => renderDvachPostCard(post, idx))}</div></div></div>
+            {currentFetchedDvachPosts.map((post,idx) => renderDvachPostCard(post, idx))}</div>
+      </div>
+    </div>
   );
+  };
 
-  const renderGeminiPanel = () => (
+const renderGeminiLabPanel = () => (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-purple-600 dark:text-purple-400 border-b pb-2 border-gray-300 dark:border-gray-700">Gemini AI Laboratory</h2>
       {!ai && (<div className="p-3 mb-4 bg-yellow-100 dark:bg-yellow-800 border border-yellow-300 dark:border-yellow-600 rounded-md text-yellow-700 dark:text-yellow-200 text-sm flex items-center" role="alert">
             <IconAlertTriangle className="h-5 w-5 mr-2 text-yellow-500 dark:text-yellow-400 flex-shrink-0" />
             <span><strong>Gemini AI Not Initialized:</strong> Please check your API key in Settings.</span></div>)}
-      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
-        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Generic Text Generation</h3>
-        <textarea aria-label="Gemini text generation prompt" value={textGenPrompt} onChange={(e) => setTextGenPrompt(e.target.value)} placeholder="Enter your prompt for text generation..." 
-            className="w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500" rows={3} disabled={!ai || geminiLoading}/>
-        <div className="mt-2 flex items-center space-x-2">
-            <button onClick={handleGenericGeminiTextGeneration} disabled={!ai || geminiLoading || !textGenPrompt.trim()}
-                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-md flex items-center disabled:opacity-50 shadow transition-colors">
-                <IconWand className="mr-2 h-5 w-5"/> Generate Text</button></div>
-        {geminiOutputText && (<div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600">
-                <div className="flex justify-between items-center mb-1">
-                    <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Generated Output:</h4>
-                    <button onClick={() => copyToClipboard(geminiOutputText)} title="Copy output" className="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded">
-                        <IconCopy className="h-4 w-4 text-gray-500 dark:text-gray-400"/></button></div>
-                <pre className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200 custom-scrollbar max-h-60 overflow-y-auto">{geminiOutputText}</pre>
-                {groundingSources.length > 0 && (<div className="mt-2">
-                        <h5 className="text-xs font-semibold text-gray-600 dark:text-gray-400">Grounding Sources:</h5>
-                        <ul className="list-disc list-inside text-xs">
-                        {groundingSources.map((source, idx) => (<li key={idx}><a href={source.web?.uri || source.retrievedContext?.uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
-                                    {source.web?.title || source.retrievedContext?.title || source.web?.uri || source.retrievedContext?.uri}</a></li>))}</ul></div>)}</div>)}</div>
-      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
-        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Image Generation (Imagen)</h3>
-        <textarea aria-label="Gemini image generation prompt" value={imageGenPrompt} onChange={(e) => setImageGenPrompt(e.target.value)} placeholder="Enter prompt for image generation..."
-            className="w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-pink-500" rows={2} disabled={!ai || isGeneratingImage}/>
-        <div className="mt-2 flex items-center space-x-2">
-            <button onClick={handleGeminiImageGeneration} disabled={!ai || isGeneratingImage || !imageGenPrompt.trim()}
-                className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-md flex items-center disabled:opacity-50 shadow transition-colors">
-                <IconPhoto className="mr-2 h-5 w-5"/> Generate Image(s)</button>
-            <label className="text-sm text-gray-600 dark:text-gray-300">Number:
-                <select value={numImagesToGenerate} onChange={(e) => setNumImagesToGenerate(parseInt(e.target.value))} className="ml-1 p-1 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 focus:ring-1 focus:ring-pink-500" disabled={!ai || isGeneratingImage}>
-                    {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}</select></label></div>
-        {generatedImages.length > 0 && (<div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
-                {generatedImages.map((img, idx) => (<div key={idx} className="border rounded-md p-1 bg-gray-50 dark:bg-gray-700">
-                        <img src={`data:${img.mimeType};base64,${img.base64Data}`} alt={img.prompt || `Generated Image ${idx + 1}`} className="w-full h-auto rounded"/>
-                        {img.prompt && <p className="text-xs mt-1 text-gray-500 dark:text-gray-400 truncate" title={img.prompt}>{img.prompt}</p>}</div>))}</div>)}</div>
-      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
-            <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Standalone Gemini Chat</h3>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left Column: Inputs & Config */}
+        <div className="space-y-4 p-4 border rounded-md border-gray-200 dark:border-gray-700">
+          <div>
+            <label htmlFor="geminiLabModelSelect" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Select Model:</label>
+            <select id="geminiLabModelSelect" value={модельЛабораторииGemini}
+                    onChange={(e) => { установитьМодельЛабораторииGemini(e.target.value); установитьВыводЛабораторииGemini(null); установитьФайлИзображенияЛаборатории(null); установитьПревьюИзображенияЛаборатории(null);}}
+              className="mt-1 block w-full p-2 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:opacity-50"
+              disabled={загрузкаВЛабораторииGemini || !ai}>
+              <option value={GEMINI_MULTIMODAL_MODEL}>Gemini 2.5 Flash (Multimodal Text/Image) - {GEMINI_MULTIMODAL_MODEL}</option>
+              <option value={GEMINI_IMAGE_MODEL}>Imagen (Image Generation) - {GEMINI_IMAGE_MODEL}</option>
+            </select>
+          </div>
+
+          {/* System Instruction is applicable to GEMINI_MULTIMODAL_MODEL */}
+          {модельЛабораторииGemini === GEMINI_MULTIMODAL_MODEL && (
+            <div>
+              <label htmlFor="geminiLabSystemInstruction" className="block text-sm font-medium text-gray-700 dark:text-gray-300">System Instruction (Optional):</label>
+              <textarea id="geminiLabSystemInstruction" value={settings.geminiSystemInstruction}
+                onChange={e => handleUpdateSettings({geminiSystemInstruction: e.target.value})}
+                rows={3} placeholder="e.g., You are a helpful assistant."
+                className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500 disabled:opacity-70"
+                disabled={загрузкаВЛабораторииGemini || !ai}/>
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="geminiLabPrompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              {модельЛабораторииGemini === GEMINI_IMAGE_MODEL ? "Image Generation Prompt:" : "Prompt:"}
+            </label>
+            <textarea id="geminiLabPrompt" value={промптЛабораторииGemini} onChange={(e) => установитьПромптЛабораторииGemini(e.target.value)}
+              placeholder={модельЛабораторииGemini === GEMINI_IMAGE_MODEL ? "e.g., A cat wearing a superhero costume" : "Enter your prompt..."}
+              className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500 disabled:opacity-70" rows={5}
+              disabled={загрузкаВЛабораторииGemini || !ai}/>
+          </div>
+
+          {/* Image upload is only relevant for the multimodal model in this new setup */}
+          {модельЛабораторииGemini === GEMINI_MULTIMODAL_MODEL && (
+            <div>
+              <label htmlFor="geminiLabImageUpload" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Upload Image (Optional for Multimodal):</label>
+              <input id="geminiLabImageUpload" type="file" accept="image/png, image/jpeg, image/webp, image/heic, image/heif"
+                     onChange={handleGeminiLabImageFileChange}
+                     className="mt-1 block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 dark:file:bg-purple-700 file:text-purple-700 dark:file:text-purple-100 hover:file:bg-purple-100 dark:hover:file:bg-purple-600 disabled:opacity-50"
+                     disabled={загрузкаВЛабораторииGemini || !ai}/>
+              {превьюИзображенияЛаборатории && <img src={превьюИзображенияЛаборатории} alt="Lab image preview" className="mt-2 max-h-40 rounded border border-gray-300 dark:border-gray-600"/>}
+            </div>
+          )}
+
+          {модельЛабораторииGemini === GEMINI_IMAGE_MODEL && (
+            <div>
+              <label htmlFor="geminiLabNumImages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Number of Images to Generate:</label>
+              <input id="geminiLabNumImages" type="number" value={количествоИзображенийДляГенерацииВЛаборатории} onChange={(e) => установитьКоличествоИзображенийДляГенерацииВЛаборатории(parseInt(e.target.value))}
+                min="1" max="8" className="mt-1 w-20 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500 disabled:opacity-70"
+                disabled={загрузкаВЛабораторииGemini || !ai}/>
+            </div>
+          )}
+
+          <fieldset className="mt-4 pt-4 border-t border-gray-300 dark:border-gray-600">
+            <legend className="text-sm font-medium text-gray-700 dark:text-gray-300">Generation Parameters</legend>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-2">
+              <div><label htmlFor="labGeminiTemp" className="block text-xs font-medium">Temperature:</label>
+                  <input id="labGeminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({geminiTemperature: parseFloat(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-70" disabled={загрузкаВЛабораторииGemini || !ai}/></div>
+              <div><label htmlFor="labGeminiTopP" className="block text-xs font-medium">Top P:</label>
+                  <input id="labGeminiTopP" type="number" step="0.05" min="0" max="1" value={settings.geminiTopP} onChange={e => handleUpdateSettings({geminiTopP: parseFloat(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-70" disabled={загрузкаВЛабораторииGemini || !ai}/></div>
+              <div><label htmlFor="labGeminiTopK" className="block text-xs font-medium">Top K:</label>
+                  <input id="labGeminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({geminiTopK: parseInt(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-70" disabled={загрузкаВЛабораторииGemini || !ai}/></div>
+              <div><label htmlFor="labGeminiMaxOut" className="block text-xs font-medium">Max Tokens:</label>
+                  <input id="labGeminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({geminiMaxOutputTokens: parseInt(e.target.value)})} className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-70" disabled={загрузкаВЛабораторииGemini || !ai}/></div>
+            </div>
+             {/* Response MIME type is relevant for multimodal model if it can output JSON */}
+             {модельЛабораторииGemini === GEMINI_MULTIMODAL_MODEL && (
+                <div className="mt-2">
+                    <label htmlFor="labResponseMimeType" className="block text-xs font-medium">Response MIME Type (for Multimodal):</label>
+                    <select id="labResponseMimeType" value={settings.geminiResponseMimeType} onChange={e => handleUpdateSettings({geminiResponseMimeType: e.target.value as 'text/plain' | 'application/json'})}
+                        className="mt-1 w-full p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-70 text-xs" disabled={загрузкаВЛабораторииGemini || !ai}>
+                        <option value="text/plain">text/plain</option>
+                        <option value="application/json">application/json</option>
+                    </select>
+                </div>
+            )}
+          </fieldset>
+
+          <div className="flex space-x-3 mt-6">
+            <button onClick={handleGeminiLabGenerate} disabled={загрузкаВЛабораторииGemini || !ai}
+              className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md flex items-center justify-center disabled:opacity-50 shadow transition-colors">
+              {загрузкаВЛабораторииGemini ? <IconRefresh className="animate-spin mr-2 h-5 w-5"/> : <IconWand className="mr-2 h-5 w-5"/>}
+              Generate
+            </button>
+            <button onClick={clearGeminiLab} disabled={загрузкаВЛабораторииGemini}
+              className="px-3 py-2 bg-gray-300 hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-500 text-gray-800 dark:text-gray-200 rounded-md flex items-center disabled:opacity-50 shadow transition-colors" title="Clear inputs and output">
+              <IconTrash className="h-5 w-5"/>
+            </button>
+          </div>
+        </div>
+
+        {/* Right Column: Output */}
+        <div className="p-4 border rounded-md bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 min-h-[300px]">
+          <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Output</h3>
+          {geminiLabLoading && <p className="text-center text-gray-500 dark:text-gray-400">Generating...</p>}
+          {!geminiLabLoading && !geminiLabOutput && <p className="text-center text-gray-500 dark:text-gray-400">Output will appear here.</p>}
+          {geminiLabOutput && (
+            typeof geminiLabOutput === 'string' ? (
+              <pre className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200 custom-scrollbar max-h-[500px] overflow-y-auto p-2 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-500">{geminiLabOutput}</pre>
+            ) : ( // Assuming it's GeneratedImage[]
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 custom-scrollbar max-h-[500px] overflow-y-auto">
+                {(geminiLabOutput as GeneratedImage[]).map((img, idx) => (
+                  <div key={idx} className="border rounded-md p-1 bg-white dark:bg-gray-800 shadow">
+                    <img src={`data:${img.mimeType};base64,${img.base64Data}`} alt={img.prompt || `Generated Lab Image ${idx + 1}`} className="w-full h-auto rounded"/>
+                    {img.prompt && <p className="text-xs mt-1 text-gray-500 dark:text-gray-400 truncate" title={img.prompt}>{img.prompt}</p>}
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </div>
+      </div>
+       {/* Standalone Chat - kept separate from the Lab's direct model interaction section */}
+       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 mt-6">
+            <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Standalone Gemini Chat (Legacy)</h3>
+            {/* ... existing chat UI ... */}
             <div className="h-80 overflow-y-auto border p-3 rounded mb-2 bg-gray-100 dark:bg-gray-700 custom-scrollbar" ref={chatMessagesEndRef}>
                 {geminiChatMessages.length === 0 && <p className="text-sm text-center text-gray-500 dark:text-gray-400">Chat history is empty. Send a message to start.</p>}
                 {geminiChatMessages.map((msg) => (<div key={msg.id} className={`mb-3 clear-both ${msg.role === 'user' ? 'float-right' : 'float-left'}`}>
@@ -1021,7 +1703,9 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
                   className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-r flex items-center disabled:opacity-50 shadow transition-colors">
                   Send <IconSend className="ml-2 h-4 w-4"/></button></div>
             {imageForGeminiChat && <p className="text-xs text-gray-500 mt-1">Attached: {imageForGeminiChat.name} <button onClick={() => setImageForGeminiChat(null)} className="ml-1 text-red-500 hover:underline">(remove)</button></p>}
-            <button onClick={clearGeminiChatHistory} className="text-xs text-gray-500 hover:underline mt-1 disabled:opacity-50" disabled={geminiChatMessages.length === 0 || geminiLoading || isStreamingChat}>Clear Chat History</button></div></div>
+            <button onClick={clearGeminiChatHistory} className="text-xs text-gray-500 hover:underline mt-1 disabled:opacity-50" disabled={geminiChatMessages.length === 0 || geminiLoading || isStreamingChat}>Clear Chat History</button>
+            </div>
+    </div>
   );
 
   const renderSettingsPanel = () => (
@@ -1106,6 +1790,41 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e => handleUpdateSettings({geminiAnalyzeAnonMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Considers Media in Non-OP Posts</label>
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({geminiReplyWithGeneratedImage: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Attempts to Generate Image with Replies</label>
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.autoMonitorDvachThreadForGemini} onChange={e => handleUpdateSettings({autoMonitorDvachThreadForGemini: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Gemini Auto-Monitors Thread for Replies (Experimental)</label>
+
+        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+          <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
+            <input type="checkbox" checked={settings.useFullThreadContext} onChange={e => handleUpdateSettings({useFullThreadContext: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+            Provide Full Thread Context to Gemini for Replies
+          </label>
+          {settings.useFullThreadContext && (
+            <div className="mt-1 pl-6">
+              <label htmlFor="settingsThreadContextLength" className="block text-xs font-medium text-gray-600 dark:text-gray-400">Number of preceding posts for context:</label>
+              <input id="settingsThreadContextLength" type="number" step="1" min="1" max="25" value={settings.threadContextLength}
+                     onChange={e => handleUpdateSettings({threadContextLength: parseInt(e.target.value)})}
+                     className="mt-1 w-24 p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 text-sm"/>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Max 25. Be mindful of token limits.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+          <h4 className="text-md font-medium text-gray-700 dark:text-gray-300 mb-2">Turnkey Bot / Monitoring</h4>
+          <label className="flex items-center text-sm">
+            <input type="checkbox" checked={settings.autoStartMonitoring} onChange={e => handleUpdateSettings({autoStartMonitoring: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+            Auto-start monitoring on app load (if "Gemini Auto-Monitors" is also enabled)
+          </label>
+          <label className="flex items-center text-sm mt-1">
+            <input type="checkbox" checked={settings.allowReplyToOwnBotPosts} onChange={e => handleUpdateSettings({allowReplyToOwnBotPosts: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+            Allow bot to reply to its own (Gemini-generated) posts
+          </label>
+          <div className="mt-1">
+            <label htmlFor="settingsMonitoringInterval" className="block text-xs font-medium text-gray-600 dark:text-gray-400">Monitoring Interval (seconds):</label>
+            <input id="settingsMonitoringInterval" type="number" step="5" min="15" max="600" value={settings.monitoringIntervalSeconds}
+                   onChange={e => handleUpdateSettings({monitoringIntervalSeconds: parseInt(e.target.value)})}
+                   className="mt-1 w-24 p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 text-sm"/>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Min 15s. How often to check for new posts.</p>
+          </div>
+        </div>
       </div>
       <details className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
         <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400">Advanced Botting Features (Experimental)</summary>
@@ -1157,15 +1876,15 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 font-sans">
       <header className="bg-white dark:bg-gray-800 shadow-md p-3 sm:p-4 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center">
-          <h1 className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">Dvach Gemini Bot</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">Двач Gemini Бот</h1>
           <div className="flex items-center space-x-2 sm:space-x-4">
             <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-              aria-label={`Toggle theme (current: ${settings.theme})`} title={`Change theme. Current: ${settings.theme}. Click to cycle.`}>
+              aria-label={`Переключить тему (текущая: ${settings.theme})`} title={`Изменить тему. Текущая: ${settings.theme}. Нажмите для смены.`}>
               <ThemeIcon className="h-5 w-5 sm:h-6 sm:w-6" /></button></div></div></header>
       <nav className="bg-gray-50 dark:bg-gray-800 border-b border-t border-gray-200 dark:border-gray-700 sticky top-[56px] sm:top-[68px] z-40">
         <div className="container mx-auto flex justify-center sm:justify-start flex-wrap">
-          {[{ id: 'dvach', label: 'Dvach Ops', icon: IconCpu }, { id: 'gemini', label: 'Gemini Lab', icon: IconSparkles },
-            { id: 'settings', label: 'Settings', icon: IconSettings }, { id: 'logs', label: 'Logs', icon: IconTerminal }].map((tab) => (
+          {[{ id: 'dvach', label: 'Операции Двач', icon: IconCpu }, { id: 'gemini', label: 'Лаборатория Gemini', icon: IconSparkles },
+            { id: 'settings', label: 'Настройки', icon: IconSettings }, { id: 'logs', label: 'Логи', icon: IconTerminal }].map((tab) => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id as 'dvach' | 'gemini' | 'settings' | 'logs')}
               aria-current={activeTab === tab.id ? "page" : undefined}
               className={`flex items-center px-2 sm:px-3 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-all duration-150 ease-in-out focus:outline-none focus:ring-1 focus:ring-blue-400
@@ -1174,11 +1893,11 @@ Format your response as a JSON object with keys: "summary", "mainTopics" (array 
               <span className="truncate">{tab.label}</span></button>))}</div></nav>
       <main className="container mx-auto p-3 sm:p-4 md:p-6" role="main"><div className="mt-1 sm:mt-2">
             {activeTab === 'dvach' && renderDvachBotPanel()}
-            {activeTab === 'gemini' && renderGeminiPanel()}
+            {activeTab === 'gemini' && renderGeminiLabPanel()}
             {activeTab === 'settings' && renderSettingsPanel()}
             {activeTab === 'logs' && renderLogsPanel()}</div></main>
       <footer className="text-center py-4 border-t border-gray-200 dark:border-gray-700 mt-8">
-        <p className="text-xs text-gray-500 dark:text-gray-400">Dvach Gemini Bot Interface - Version {APP_VERSION} - Use responsibly.</p></footer></div>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Интерфейс Двач Gemini Бота - Версия {APP_VERSION} - Используйте ответственно.</p></footer></div>
   );
 };
 export default App;

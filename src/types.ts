@@ -173,6 +173,15 @@ export interface AppSettings {
   enablePrefilledPostingMode: boolean;
   prefilledPostMessages: string; // Newline-separated messages
   prefilledPostTargets: string; // Newline-separated target post numbers (optional)
+
+  // Full Thread Context for Gemini Replies
+  useFullThreadContext: boolean;
+  threadContextLength: number; // Number of preceding posts to include in context
+
+  // Turnkey Bot Operation / Thread Monitoring
+  monitoringIntervalSeconds: number; // Interval for checking new posts
+  autoStartMonitoring: boolean; // Auto-start monitoring on app load if autoMonitorDvachThreadForGemini is true
+  allowReplyToOwnBotPosts: boolean; // Whether the monitor can reply to its own (Gemini) posts
 }
 
 export interface LogEntry {

@@ -18,8 +18,10 @@ export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.0";
 
 
 export const APP_VERSION = "2.3.0"; // Updated version for auth changes
-export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
-export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
+// export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17"; // Deprecated
+// export const GEMINI_VISION_MODEL = "gemini-pro-vision"; // Deprecated
+export const GEMINI_MULTIMODAL_MODEL = "gemini-2.5-flash-preview-05-20";
+export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002"; // Or "imagen-005" if that's the latest from docs
 
 export const THREAD_CACHE_DURATION_MS = 1 * 30 * 1000; // 30 seconds cache for thread data (used in dvachService for its own cache)
 export const MAX_LOG_ENTRIES = 250;

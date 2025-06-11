@@ -282,6 +282,28 @@ export async function postWithSessionCookie(
   return responseData;
 }
 
+export async function fetchImageAsBase64(imageUrl: string, proxyPrefix: string): Promise<{base64Data: string, mimeType: string}> {
+  const proxiedUrl = proxyPrefix ? `${proxyPrefix}${imageUrl.startsWith('http') ? imageUrl : 'https://' + imageUrl}` : imageUrl;
+  const response = await fetch(proxiedUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.statusText} from URL: ${proxiedUrl}`);
+  }
+  const blob = await response.blob();
+  const mimeType = blob.type;
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        // Remove the "data:mime/type;base64," prefix
+        resolve({ base64Data: reader.result.split(',')[1], mimeType });
+      } else {
+        reject(new Error('Failed to read image as base64 string'));
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
 export function extractDvachApiError(error: any): DvachApiError | null {
   if (error && typeof error.message === 'string') {
