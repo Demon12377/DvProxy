@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GoogleGenAI, Part, Chat as GeminiChatInstanceType, Content, GenerateContentParameters, GenerateImagesResponse } from "@google/genai";
+import { GoogleGenAI, Part, Chat as GeminiChatInstanceType, GenerateContentParameters, GenerateImagesResponse } from "@google/genai";
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ChatMessage, ProxyModeForGET,
   GeneratedImage, GroundingChunk, DvachThreadResponse, 
@@ -534,10 +534,10 @@ const App: React.FC = () => {
                            imageBlob.type; // Fallback to blob's type
             if (!mimeType.startsWith('image/')) mimeType = 'image/jpeg'; // Default if type is strange
 
-            const base64data = await new Promise<string>((resolve, reject) => {
+            const base64data = await new Promise<string>((resolveP, rejectP) => {
                 const reader = new FileReader();
-                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                reader.onerror = reject;
+                reader.onloadend = () => resolveP((reader.result as string).split(',')[1]);
+                reader.onerror = rejectP;
                 reader.readAsDataURL(imageBlob);
             });
             geminiMessageParts.push({ inlineData: { mimeType: mimeType, data: base64data } });
@@ -634,9 +634,7 @@ const App: React.FC = () => {
             if (Number(dvachPost.timestamp) * 1000 <= lastBotPostInConvo.timestamp) continue; // Post is older than bot's last message
             if (sentMessages.some(sm => sm.num === dvachPost.num && sm.board === convo.board && sm.thread === convo.threadId)) continue; // Already processed or self-post
             if (convo.participatingPostNumbers.includes(dvachPost.num)) continue; // Already part of this convo
-
-            const botPostNumRegex = new RegExp(`&gt;&gt;(${lastBotPostInConvo.id.split('-').pop()})`); // Assuming last part of model message ID is post num
-             // Or, more reliably, use the last sentMessage from the bot in this conversation.
+            
             const lastSentBotMessageInConvo = sentMessages.filter(sm => sm.isGeminiPost && sm.geminiConversationId === convoId).sort((a,b) => b.timestamp - a.timestamp)[0];
             if (!lastSentBotMessageInConvo) continue;
             
@@ -656,7 +654,12 @@ const App: React.FC = () => {
                     const imageResponse = await fetch(proxiedImageUrl);
                     if (imageResponse.ok) {
                         const imageBlob = await imageResponse.blob();
-                        const base64data = await new Promise<string>((resolve, reject) => { /* ... FileReader ... */ });
+                        const base64data = await new Promise<string>((resolveP, rejectP) => {
+                           const reader = new FileReader();
+                           reader.onloadend = () => resolveP((reader.result as string).split(',')[1]);
+                           reader.onerror = rejectP;
+                           reader.readAsDataURL(imageBlob);
+                        });
                         let mimeType = imageFile.type === 1 ? 'image/jpeg' : imageFile.type === 2 ? 'image/png' : imageBlob.type;
                         if (!mimeType.startsWith('image/')) mimeType = 'image/jpeg';
                         userReplyParts.unshift({ inlineData: { mimeType, data: base64data }});
@@ -716,7 +719,7 @@ const App: React.FC = () => {
     setAutonomousBotStatus(`Starting bot for /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}...`);
     addAutonomousBotActivityLog(`Bot started. Target: /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}. System prompt: "${settings.autonomousBotSystemPrompt.substring(0,50)}..."`);
     runBotCycle(); // Initial run
-    autonomousBotIntervalRef.current = setInterval(runBotCycle, 60000); // Run every 60 seconds
+    autonomousBotIntervalRef.current = setInterval(runBotCycle, 60000) as any as number; // Cast to number
 
     return () => {
       if (autonomousBotIntervalRef.current) {
@@ -738,10 +741,10 @@ const App: React.FC = () => {
       const currentImageFile = imageForGeminiChat; 
       imagePreviewUrl = URL.createObjectURL(currentImageFile);
       try {
-        const base64data = await new Promise<string>((resolve, reject) => {
+        const base64data = await new Promise<string>((resolveP, rejectP) => {
           const reader = new FileReader();
-          reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-          reader.onerror = reject;
+          reader.onloadend = () => resolveP((reader.result as string).split(',')[1]);
+          reader.onerror = rejectP;
           reader.readAsDataURL(currentImageFile);
         });
         userMessageParts.push({ inlineData: { mimeType: currentImageFile.type, data: base64data } });
@@ -758,7 +761,6 @@ const App: React.FC = () => {
       imagePreview: imagePreviewUrl,
     };
     setGeminiChatMessages(prev => [...prev, userMessage]);
-    const currentInput = geminiChatInput; // Capture before clearing
     setGeminiChatInput('');
     setImageForGeminiChat(null); 
 
@@ -771,7 +773,7 @@ const App: React.FC = () => {
       let chat = currentGeminiChat;
       // If history is just the user message and the empty model shell, or no chat, start new.
       if (!chat || geminiChatMessages.length <= 2) { 
-        const historyForNewChat: Content[] = [userMessage] // Start with current user message
+        const historyForNewChat: any[] = [userMessage] // Start with current user message // TODO: Fix 'any' type to Gemini's Content[]
             .filter(m => (m.role === 'user' || m.role === 'model') && m.parts.length > 0) 
             .map(m => ({ role: m.role as 'user' | 'model', parts: m.parts! }));
         
