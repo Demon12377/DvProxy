@@ -1,3 +1,4 @@
+
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { GoogleGenAI, Part, Chat } from "@google/genai"; 
@@ -234,7 +235,7 @@ const App: React.FC = () => {
 
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info', data?: unknown) => {
     setLogs(prevLogs => [{ id: Date.now().toString(), timestamp: Date.now(), message, type, data }, ...prevLogs.slice(0, MAX_LOG_ENTRIES - 1)]);
-    const consoleMethod = type === 'error' || type === 'bot_error' ? console.error : type === 'warning' ? console.warn : console.log;
+    const consoleMethod = type === 'error' || type === 'bot_error' ? console.error : type === 'warning' || type === 'bot_warning' ? console.warn : console.log;
     consoleMethod(`[${type.toUpperCase()}] ${message}`, data !== undefined ? data : "");
   }, []);
 
@@ -481,7 +482,7 @@ const App: React.FC = () => {
     if (currentFetchedDvachPosts.length > 0) {
         const opPost = currentFetchedDvachPosts.find(p => p.num === currentThreadId || p.op === 1);
         const recentPosts = currentFetchedDvachPosts.slice(-5); 
-        threadContextSummary = `Thread OP (>>${opPost?.num || currentThreadId}): "${(opPost?.comment || "N/A").replace(/<[^>]*>?/gm, '').substring(0,100)}...".\n`;
+        threadContextSummary = `Thread OP (>>${opPost?.num || currentThreadId}): "${(opPost?.comment || "N/A").replace(/<[^>]*>?/gm, '').substring(0,100)}..."\n`;
         threadContextSummary += `Recent posts in viewer include:\n` + recentPosts.map(p => `>>${p.num}: "${p.comment.replace(/<[^>]*>?/gm, '').substring(0,70)}..."`).join('\n');
     }
 
@@ -717,7 +718,7 @@ const App: React.FC = () => {
                         history: [] // Start fresh for random reply, context is in the first message
                     }); 
 
-                    const stream = await botChat.sendMessageStream({ parts: initialUserMessageParts }); // Use parts directly
+                    const stream = await botChat.sendMessageStream({ message: initialUserMessageParts });
                     let botReplyText = "";
                     for await (const chunk of stream) { botReplyText += chunk.text || ""; }
                     
@@ -842,7 +843,7 @@ const App: React.FC = () => {
                         
                         convo.history.push({ id: `user-${dvachPost.num}-${Date.now()}`, role: 'user', parts: userReplyParts, timestamp: dvachPost.timestamp * 1000 });
                         
-                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ parts: userReplyParts });
+                        const geminiResponse = await currentConvoChatInstance.sendMessageStream({ message: userReplyParts });
                         let botFollowUpText = "";
                         for await (const chunk of geminiResponse) { botFollowUpText += chunk.text || ""; }
 
