@@ -96,9 +96,7 @@ function buildProxiedGetUrlForApp(
   // If mode is vercel_serverless, this function should ideally not be called for external URLs.
   // /api/get-thread is handled by dvachService which forms its own path.
   // This check is more for if it *is* called with vercel_serverless for an external URL.
-  if (proxyMode === 'vercel_serverless') {
-      // If vercel_serverless is the mode for thread data, but this function is somehow called for an external image,
-      // it means the image proxy logic should have handled it. Fallback to direct or custom if provided.
+  if (proxyMode === 'vercel_serverless') { 
       console.warn(`[App/buildProxiedGetUrlForApp] 'vercel_serverless' proxy mode was passed for external URL '${targetUrl}'. This mode is for internal /api/get-thread. Trying custom URL if provided, or direct fetch.`);
       if (customProxyUrl) { // Attempt to use the general custom proxy if available in this odd case
         if (customProxyUrl.startsWith(PROXY_URL_GO_X2U_BASE.split('?')[0])) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
@@ -518,7 +516,7 @@ const App: React.FC = () => {
 
     if (targetPost.files && targetPost.files.length > 0) {
         const analysisEnabled = (settings.geminiAnalyzeOpMedia && targetPost.op === 1) || 
-                                (settings.geminiAnalyzeAnonMedia && targetPost.op !== 1);
+                                (settings.geminiAnalyzeAnonMedia && targetPost.op !== 1 && targetPost.num !== currentThreadId); // Adjusted logic for non-OP
         if (analysisEnabled) {
             imageFilesToAnalyze = targetPost.files
                 .filter(file => file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9) // jpg, png, gif, webp (image types)
@@ -532,10 +530,14 @@ const App: React.FC = () => {
             try {
                 const imageUrl = `${DVACH_DOMAINS[0]}${dvachImageFile.path}`; 
                 const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
-                addLog(`Fetching image ${dvachImageFile.name} for Gemini analysis (manual reply) from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
+                addLog(`Fetching image ${dvachImageFile.name} for Gemini analysis (manual reply) using proxy mode '${settings.proxyModeForImagesGET}' from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
 
                 const imageResponse = await fetch(proxiedImageUrl);
-                if (!imageResponse.ok) throw new Error(`Failed to fetch image: ${imageResponse.status} ${imageResponse.statusText} from ${proxiedImageUrl}`);
+                if (!imageResponse.ok) {
+                    const errorDetail = `Proxy error: ${imageResponse.status} ${imageResponse.statusText}. Check proxy settings or proxy server status. If using cors-anywhere, ensure it's activated.`;
+                    addLog(`Failed to fetch image "${dvachImageFile.name}" via proxy ${proxiedImageUrl}. ${errorDetail}`, 'warning', {status: imageResponse.status, statusText: imageResponse.statusText});
+                    throw new Error(`Failed to fetch image via proxy: ${imageResponse.status} ${imageResponse.statusText}`);
+                }
                 const imageBlob = await imageResponse.blob();
                 
                 let mimeType = dvachImageFile.type === 1 ? 'image/jpeg' : 
@@ -554,7 +556,7 @@ const App: React.FC = () => {
                 geminiMessageParts.push({ inlineData: { mimeType: mimeType, data: base64data } });
                 addLog(`Image "${dvachImageFile.name}" successfully prepared for Gemini (manual reply).`, 'gemini');
             } catch (imgError) {
-                addLog(`Failed to fetch/process image "${dvachImageFile.name}" for Gemini (manual reply): ${(imgError as Error).message}.`, 'warning', imgError);
+                addLog(`Failed to fetch/process image "${dvachImageFile.name}" for Gemini (manual reply): ${(imgError as Error).message}. Confirm proxy settings and external proxy status.`, 'warning', imgError);
                 userPromptText += ` (Note: Analysis of image ${dvachImageFile.name} failed. Rely on text description if available).`;
             }
         }
@@ -693,6 +695,7 @@ const App: React.FC = () => {
                                 try { 
                                     const imageUrl = `${DVACH_DOMAINS[0]}${opImageFile.path}`;
                                     const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
+                                    addAutonomousBotActivityLog(`Бот: Фетчинг изображения ${opImageFile.name} из ОП-поста (>>${opPost.num}) используя прокси '${settings.proxyModeForImagesGET}' с URL: ${proxiedImageUrl}`, 'bot_activity');
                                     const imageResponse = await fetch(proxiedImageUrl);
                                     if (imageResponse.ok) {
                                         const imageBlob = await imageResponse.blob();
@@ -701,7 +704,10 @@ const App: React.FC = () => {
                                         initialUserMessageParts.push({ inlineData: { mimeType, data: base64data } });
                                         initialContextForStorage.opPostImagePreview = `data:${mimeType};base64,...`; 
                                         addAutonomousBotActivityLog(`Изображение ${opImageFile.name} из ОП-поста >>${opPost.num} подготовлено для бота.`);
-                                    } else { throw new Error(`Fetch failed ${imageResponse.status}`); }
+                                    } else { 
+                                        const errText = await imageResponse.text().catch(()=>"Unknown proxy error text");
+                                        throw new Error(`Fetch failed ${imageResponse.status}. Proxy response: ${errText.substring(0,100)}`); 
+                                    }
                                 } catch (imgErr) { addAutonomousBotActivityLog(`Ошибка обработки изображения ${opImageFile.name} из ОП-поста для бота: ${(imgErr as Error).message}`, 'bot_warning');}
                              }
                         }
@@ -718,6 +724,7 @@ const App: React.FC = () => {
                                 try { 
                                     const imageUrl = `${DVACH_DOMAINS[0]}${imageFile.path}`;
                                     const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
+                                     addAutonomousBotActivityLog(`Бот: Фетчинг изображения ${imageFile.name} из целевого поста (>>${randomPostToReply.num}) используя прокси '${settings.proxyModeForImagesGET}' с URL: ${proxiedImageUrl}`, 'bot_activity');
                                     const imageResponse = await fetch(proxiedImageUrl);
                                     if (imageResponse.ok) {
                                         const imageBlob = await imageResponse.blob();
@@ -726,7 +733,10 @@ const App: React.FC = () => {
                                         initialUserMessageParts.push({ inlineData: { mimeType, data: base64data } });
                                         initialContextForStorage.targetPostImagePreview = `data:${mimeType};base64,...`;
                                         addAutonomousBotActivityLog(`Изображение ${imageFile.name} из целевого поста >>${randomPostToReply.num} подготовлено для бота.`);
-                                    } else { throw new Error(`Fetch failed ${imageResponse.status}`);}
+                                    } else { 
+                                        const errText = await imageResponse.text().catch(()=>"Unknown proxy error text");
+                                        throw new Error(`Fetch failed ${imageResponse.status}. Proxy response: ${errText.substring(0,100)}`);
+                                    }
                                 } catch (imgErr) { addAutonomousBotActivityLog(`Ошибка обработки изображения ${imageFile.name} из целевого поста для бота: ${(imgErr as Error).message}`, 'bot_warning');}
                             }
                          }
@@ -934,7 +944,7 @@ const App: React.FC = () => {
                 className="rounded object-cover w-full h-full border border-gray-300 dark:border-gray-500 group-hover:opacity-80 transition-opacity"
                 loading="lazy"
                 onError={(e) => { 
-                    addLog(`Failed to load thumbnail: ${proxiedThumbUrl} (original: ${thumbUrl}). Attempting direct.`, 'warning');
+                    addLog(`Failed to load thumbnail via proxy '${settings.proxyModeForImagesGET}': ${proxiedThumbUrl} (original: ${thumbUrl}). Attempting direct.`, 'warning');
                     (e.target as HTMLImageElement).src = thumbUrl; // Fallback to direct URL on error
                     (e.target as HTMLImageElement).onerror = null; // Prevent infinite loop
                 }}
@@ -1231,7 +1241,7 @@ const App: React.FC = () => {
       {/* Proxy for Image/Media GET Requests */}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Proxy for Image/Media GET Requests</h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400">Used by Manual Reply and Bot for fetching images/media for Gemini analysis.</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Used by Manual Reply and Bot for fetching images/media for Gemini analysis and for displaying thumbnails in Thread Viewer.</p>
         <div><label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium">Proxy Mode for Images/Media GET:</label>
           <select id="settingsProxyModeForImagesGET" value={settings.proxyModeForImagesGET} 
             onChange={e => {
@@ -1257,6 +1267,10 @@ const App: React.FC = () => {
                 E.g., for cors-anywhere: <code>{DEFAULT_CORS_ANYWHERE_PROXY}</code>. For go.x2u: <code>{PROXY_URL_GO_X2U_BASE}</code>.
             </p>
             </div>)}
+          <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
+            <IconAlertTriangle className="inline h-4 w-4 mr-1 align-text-bottom"/>
+            Public proxies (like the default cors-anywhere.com or go.x2u.in) can be unreliable. `cors-anywhere.com` often requires visiting its main page to activate the demo. For consistent image analysis, consider setting up your own CORS proxy.
+          </p>
       </div>
 
       {/* Gemini API Configuration */}
@@ -1411,3 +1425,4 @@ const App: React.FC = () => {
   );
 };
 export default App;
+
