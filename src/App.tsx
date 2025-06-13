@@ -19,9 +19,10 @@ import {
 import { generateUserAgent } from './utils/userAgentGenerator'; 
 
 import {
-  IconSettings, IconTerminal, IconSend, IconTrash, IconSun, IconMoon, IconCpu, 
+  IconSettings, IconTerminal, IconSend, IconTrash, IconCpu, 
   IconSparkles, IconAlertTriangle, IconRefresh, 
-  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat
+  IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat,
+  IconSun, IconMoon // Keep IconSun and IconMoon for the new ThemeIcon component
 } from './components/Icons'; 
 
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
@@ -860,18 +861,32 @@ const App: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autonomousBotActive, ai, dvachSessionCookies, settings]); 
   
-  const toggleTheme = () => { /* ... */ };
-  const ThemeIcon = useMemo(() => { /* ... */ }, [settings.theme]);
+  const toggleTheme = () => {
+    const newTheme = settings.theme === 'light' ? 'dark' : settings.theme === 'dark' ? 'system' : 'light';
+    handleUpdateSettings({ theme: newTheme });
+  };
+
+  const ThemeIconComponent: React.FC<React.SVGProps<SVGSVGElement>> = (props) => {
+    if (settings.theme === 'dark') return <IconMoon {...props} />;
+    if (settings.theme === 'light') return <IconSun {...props} />;
+    // System theme
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return prefersDark ? <IconMoon {...props} /> : <IconSun {...props} />;
+  };
+
 
   const renderDvachPostCard = (post: DvachPost, index: number) => {
-     const isMyPost = sentMessages.some(m => m.num === post.num && m.board === currentBoard && m.thread === currentThreadId);
+     const sentMessageData = sentMessages.find(m => m.num === post.num && m.board === currentBoard && m.thread === currentThreadId);
+     const isMyPost = !!sentMessageData;
+     const isGeminiPostByBot = sentMessageData?.isGeminiPost || false;
+
      const isGeminiReplyToThis = sentMessages.some(m => m.geminiTriggerPostNum === post.num && m.isGeminiPost);
     
      const cardBg = isMyPost ? 
-        (post.isGeminiPost ? "bg-purple-50 dark:bg-purple-900/50" : "bg-blue-50 dark:bg-blue-900/50") : 
+        (isGeminiPostByBot ? "bg-purple-50 dark:bg-purple-900/50" : "bg-blue-50 dark:bg-blue-900/50") : 
         "bg-gray-50 dark:bg-gray-700";
      const borderColor = isMyPost ?
-        (post.isGeminiPost ? "border-purple-300 dark:border-purple-700" : "border-blue-300 dark:border-blue-700") :
+        (isGeminiPostByBot ? "border-purple-300 dark:border-purple-700" : "border-blue-300 dark:border-blue-700") :
         "border-gray-200 dark:border-gray-600";
 
     return (
@@ -895,7 +910,7 @@ const App: React.FC = () => {
             {post.num}
           </a>
           {isMyPost && <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100">You</span>}
-          {post.isGeminiPost && <IconSparkles className="inline-block ml-1 h-3 w-3 text-purple-500" title="Posted by Gemini (via bot/manual reply)"/>}
+          {isGeminiPostByBot && <IconSparkles className="inline-block ml-1 h-3 w-3 text-purple-500" title="Posted by Gemini (via bot/manual reply)"/>}
         </span>
         <time dateTime={new Date(post.timestamp * 1000).toISOString()}>
           {new Date(post.timestamp * 1000).toLocaleString()}
@@ -935,7 +950,7 @@ const App: React.FC = () => {
 
       <div 
         className="prose prose-sm dark:prose-invert max-w-none break-words"
-        dangerouslySetInnerHTML={{ __html: post.comment.replace(/&gt;&gt;(\d+)/g, (match, p1) => `<a href="#post-${p1}" class="text-blue-500 dark:text-blue-400 hover:underline" data-replyto="${p1}">&gt;&gt;${p1}</a>`) }}
+        dangerouslySetInnerHTML={{ __html: post.comment.replace(/&gt;&gt;(\d+)/g, (_match, p1) => `<a href="#post-${p1}" class="text-blue-500 dark:text-blue-400 hover:underline" data-replyto="${p1}">&gt;&gt;${p1}</a>`) }}
       />
 
       <div className="mt-2 text-right">
@@ -1324,7 +1339,7 @@ const App: React.FC = () => {
             'bg-gray-100 dark:bg-gray-700/60 border-gray-500 text-gray-700 dark:text-gray-300' 
           }`}>
             <span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase().replace(/_/g, ' ')}]</span>: {log.message}
-            {log.data && <pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-800 p-1 rounded max-w-full overflow-x-auto">{formatLogDataForDisplay(log.data)}</pre>}
+            {(log.data !== undefined && log.data !== null) && (<pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-800 p-1 rounded max-w-full overflow-x-auto">{formatLogDataForDisplay(log.data)}</pre>)}
           </div>
         ))}
       </div>
@@ -1347,7 +1362,7 @@ const App: React.FC = () => {
               aria-label={`Toggle theme (current: ${settings.theme})`}
               title={`Change theme. Current: ${settings.theme}. Click to cycle: light -> dark -> system -> light...`}
             >
-              <ThemeIcon className="h-6 w-6" />
+              <ThemeIconComponent className="h-6 w-6" />
             </button>
           </div>
         </div>
