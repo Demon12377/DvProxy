@@ -144,14 +144,21 @@ export interface AppSettings {
 
   theme: 'light' | 'dark' | 'system';
 
-  proxyModeForGET: ProxyModeForGET;
-  customProxyUrlForGET: string;
+  proxyModeForGET: ProxyModeForGET; // For thread data primarily
+  customProxyUrlForGET: string;    // For thread data if proxyModeForGET is custom
+  
+  proxyModeForImagesGET: ProxyModeForGET; // Specific for images
+  customProxyUrlForImagesGET: string;   // Specific for images if its mode is custom
+  
   userAgent: string; 
 
   // Gemini specific settings for Dvach interaction
   geminiAnalyzeOpMedia: boolean; 
   geminiAnalyzeAnonMedia: boolean; 
   geminiReplyWithGeneratedImage: boolean; // For both manual and bot
+  maxImagesToAnalyzePerPost: number; // New setting
+  analyzeVideosInTriggerPosts: boolean; // New setting (UI only for now)
+
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string;
