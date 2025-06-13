@@ -1,7 +1,7 @@
 
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GoogleGenAI, Part, Chat } from "@google/genai"; 
+import { GoogleGenAI, Part } from "@google/genai"; 
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ChatMessage, ProxyModeForGET,
   DvachThreadResponse, 
@@ -14,7 +14,7 @@ import {
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
   GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   PROXY_URL_GO_X2U_BASE, DEFAULT_CORS_ANYWHERE_PROXY, DVACH_DOMAINS, DEFAULT_USER_AGENT,
-  DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST, PROXY_URL_CODETABS_BASE, BUMP_KEYWORDS
+  DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST, PROXY_URL_CODETABS_BASE
 } from './constants';
 import { generateUserAgent } from './utils/userAgentGenerator'; 
 
