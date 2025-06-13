@@ -32,9 +32,9 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       rollupOptions: {
-        // @google/genai is loaded via import map in index.html, so it's already external.
-        // No need to explicitly list it here unless there are specific build issues.
-        // external: [] 
+        // @google/genai is loaded via import map in index.html from esm.sh.
+        // Mark it as external to prevent Vite from trying to bundle it or its peer dependencies.
+        external: ['@google/genai'] 
       }
     }
   }
