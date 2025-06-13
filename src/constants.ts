@@ -17,7 +17,7 @@ export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.3_m
 export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1"; // No change, structure is same
 
 
-export const APP_VERSION = "2.7.1"; 
+export const APP_VERSION = "2.7.2"; 
 export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
 
@@ -25,6 +25,7 @@ export const THREAD_CACHE_DURATION_MS = 1 * 45 * 1000; // 45 seconds cache for t
 export const MAX_LOG_ENTRIES = 300;
 export const MAX_SENT_MESSAGES_STORED = 200;
 export const DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST = 1;
+export const BUMP_KEYWORDS = ["bump", "бамп", "ап", "up"];
 
 // Default User-Agent for client-side GETs and passed to serverless functions.
 // Can be overridden in settings.
