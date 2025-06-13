@@ -1,5 +1,5 @@
-/// <reference types="vite/client" />
-import { DvachThreadResponse, DvachPostApiResponse, DvachApiError, ProxyModeForGET, DvachSessionCookies } from '../types';
+
+import { DvachThreadResponse, DvachPostApiResponse, DvachApiError, ProxyModeForGET, DvachSessionCookies, DvachPost } from '../types';
 import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT } from '../constants';
 
 interface CachedThread {
@@ -14,11 +14,22 @@ function buildProxiedGetUrl(
 ): string {
   switch (proxyMode) {
     case 'vercel_serverless':
-      console.warn("[dvachService] buildProxiedGetUrl called with 'vercel_serverless', this indicates an issue if targetUrl is external. Fetch should be to local API.");
-      return targetUrl; 
+      // This case should ideally not be hit if targetUrl is an external Dvach resource like an image.
+      // For thread data, it means /api/get-thread. For images, a different strategy (or proxy) is needed if Vercel serverless is selected.
+      console.warn(`[dvachService/buildProxiedGetUrl] Attempting to build proxied URL for '${targetUrl}' with 'vercel_serverless' mode. This mode is for /api/* endpoints. Falling back to direct URL or custom if applicable.`);
+      // If a custom proxy URL is somehow set despite vercel_serverless mode, attempt to use it.
+      if (customProxyUrl) {
+        if (customProxyUrl.includes(PROXY_URL_GO_X2U_BASE.split('?')[0])) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
+        if (customProxyUrl.includes(DEFAULT_CORS_ANYWHERE_PROXY.split('/')[2])) return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
+        // General prefix/param logic for custom URL if provided
+        if (customProxyUrl.endsWith('=')) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`; // Param style
+        return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`; // Prefix style
+      }
+      return targetUrl; // Fallback to direct URL if no customProxyUrl makes sense here
 
     case 'custom_go_x2u':
-      return `${customProxyUrl || PROXY_URL_GO_X2U_BASE}${encodeURIComponent(targetUrl)}`;
+      const goX2UBase = (customProxyUrl || PROXY_URL_GO_X2U_BASE);
+      return `${goX2UBase}${encodeURIComponent(targetUrl)}`;
 
     case 'custom_cors_anywhere':
       const corsAnywhereBase = (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY).endsWith('/') 
@@ -31,7 +42,10 @@ function buildProxiedGetUrl(
       return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
       
     case 'custom_general_param':
-      if (!customProxyUrl) return targetUrl; 
+      if (!customProxyUrl || !customProxyUrl.includes('=')) {
+        console.warn(`[dvachService/buildProxiedGetUrl] Custom general param proxy mode selected, but URL '${customProxyUrl}' doesn't look like a param proxy. Using direct.`);
+        return targetUrl;
+      }
       return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
 
     case 'none':
@@ -70,15 +84,16 @@ export async function getThreadData(
   }
 
   let fetchUrl: string;
-  let targetDvachUrl: string | undefined;
+  let targetDvachUrl: string | undefined; // For logging/debugging
 
   if (proxyModeForGET === 'vercel_serverless') {
     fetchUrl = `/api/get-thread?board=${encodeURIComponent(board)}&thread=${encodeURIComponent(threadId)}`;
-    console.info(`[dvachService/getThreadData] Fetching via Vercel Serverless: ${fetchUrl}`);
+    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl}`);
   } else {
-    targetDvachUrl = `https://2ch.hk/${board}/res/${threadId}.json`; // Assuming 2ch.hk, could be made dynamic from DVACH_DOMAINS
+    // Assuming 2ch.hk as the base, could be made dynamic from DVACH_DOMAINS in future if needed for this service
+    targetDvachUrl = `https://2ch.hk/${board}/res/${threadId}.json`; 
     fetchUrl = buildProxiedGetUrl(targetDvachUrl, proxyModeForGET, customProxyUrlForGET);
-    console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target: ${targetDvachUrl})`);
+    console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetDvachUrl})`);
   }
   
   let response;
@@ -93,23 +108,24 @@ export async function getThreadData(
     });
   } catch (networkError) {
     console.error(`[dvachService/getThreadData] Network error fetching ${fetchUrl}:`, networkError);
-    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}`);
+    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless)'}`);
   }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "Could not retrieve error text.");
     console.error(`[dvachService/getThreadData] Failed to fetch thread ${board}/${threadId} from ${fetchUrl}. Status: ${response.status}. Response: ${errorText.substring(0,500)}`);
-    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}. Server/Proxy response: ${errorText.substring(0,200)}`);
+    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless)'}. Server/Proxy response: ${errorText.substring(0,200)}`);
   }
 
   let data: DvachThreadResponse;
   try {
     const rawData = await response.json();
-     if (rawData.threads && rawData.threads[0] && rawData.threads[0].posts) {
-        rawData.threads[0].posts = rawData.threads[0].posts.map((post: any) => ({
+    // Ensure post numbers are strings, as per Dvach API sometimes returning numbers
+    if (rawData.threads && rawData.threads[0] && rawData.threads[0].posts) {
+        rawData.threads[0].posts = rawData.threads[0].posts.map((post: any): DvachPost => ({
             ...post,
-            num: String(post.num),
-            parent: String(post.parent),
+            num: String(post.num), // Ensure string
+            parent: String(post.parent), // Ensure string
         }));
     }
     data = rawData as DvachThreadResponse;
@@ -118,7 +134,7 @@ export async function getThreadData(
     const responseTextFallback = "Could not get text after JSON parse failed.";
     const responseTextIfAvailable = response.bodyUsed ? responseTextFallback : await response.text().catch(() => responseTextFallback);
     console.error(`[dvachService/getThreadData] Failed to parse JSON response from ${fetchUrl}. Error:`, jsonError, "Response text:", responseTextIfAvailable.substring(0, 500));
-    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Details: ${responseTextIfAvailable.substring(0,200)}`);
+    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${targetDvachUrl || 'N/A (Serverless)'}. Details: ${responseTextIfAvailable.substring(0,200)}`);
   }
   
   const cacheEntry: CachedThread = { data, timestamp: Date.now() };
@@ -149,19 +165,23 @@ export async function loginToDvach(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json', // Serverless function expects JSON
-        'X-User-Agent': userAgent,
+        'X-User-Agent': userAgent, // Pass user agent to serverless function
       },
       body: JSON.stringify({ purchased_passcode: purchasedPasscode }),
     });
   } catch (networkError) {
     console.error('[dvachService/loginToDvach] Network error calling /api/dvach-login:', networkError);
-    throw new Error(`Network error calling login API: ${(networkError as Error).message}`);
+    throw new Error(`Network error calling login API /api/dvach-login: ${(networkError as Error).message}`);
   }
 
-  const responseData: DvachPostApiResponse = await response.json();
+  const responseData: DvachPostApiResponse = await response.json().catch(async (e) => {
+      const text = await response.text();
+      console.error('[dvachService/loginToDvach] Failed to parse JSON from /api/dvach-login. Status:', response.status, 'Body:', text.substring(0,500), e);
+      throw new Error(`Login API /api/dvach-login returned non-JSON response (Status: ${response.status}). Body: ${text.substring(0,200)}`);
+  });
 
   if (!response.ok || responseData.result !== 1 || !responseData.passcode_auth_cookie_value) {
-    const errorMsg = responseData?.error?.message || responseData?.reason || responseData?.Error || `Dvach login failed. Status: ${response.status}.`;
+    const errorMsg = responseData?.error?.message || responseData?.reason || responseData?.Error || `Dvach login failed (via /api/dvach-login). Status: ${response.status}.`;
     console.error('[dvachService/loginToDvach] Login failed:', errorMsg, responseData);
     throw new Error(errorMsg);
   }
@@ -178,27 +198,27 @@ export async function loginToDvach(
  * Sends data to the internal serverless function /api/dvach-post using active session cookies.
  * @param sessionCookies The active Dvach session cookies (passcode_auth, usercode).
  * @param board Board ID (e.g., "b").
- * @param threadIdForDvach Thread ID to post in, or "0"/empty for new thread.
+ * @param threadIdForDvach Thread ID to post in, or "0"/empty for new thread. This is Dvach's 'thread' field.
  * @param comment Post content.
  * @param file Optional file to attach.
- * @param parentPostNumForDvach Optional. Specific post number being replied to.
+ * @param parentPostNumForDvach Optional. Specific post number being replied to. This is Dvach's 'parent' field.
  * @param useSage Whether to use sage.
- * @param userAgent The User-Agent string for the request.
+ * @param userAgent The User-Agent string for the request (passed to serverless).
  * @returns Promise resolving to Dvach's API response forwarded by the serverless function.
  */
 export async function postWithSessionCookie(
     sessionCookies: DvachSessionCookies,
     board: string,
-    threadIdForDvach: string, 
+    threadIdForDvach: string, // Corresponds to Dvach API 'thread' field (0 for new thread, OP num for existing)
     comment: string,
     file?: File | null,
-    parentPostNumForDvach?: string, 
+    parentPostNumForDvach?: string, // Corresponds to Dvach API 'parent' field (specific post num being replied to)
     useSage?: boolean,
     userAgent: string = DEFAULT_USER_AGENT
   ): Promise<DvachPostApiResponse> {
   
   if (!sessionCookies.passcode_auth) {
-    throw new Error("passcode_auth session cookie is missing. Cannot post.");
+    throw new Error("passcode_auth session cookie is missing. Cannot post. Please login.");
   }
 
   console.info('[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post. Params:', { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
@@ -209,14 +229,14 @@ export async function postWithSessionCookie(
     formData.append('user_code_cookie_value', sessionCookies.usercode);
   }
   formData.append('board', board);
-  formData.append('thread_id_for_dvach', threadIdForDvach); 
+  formData.append('thread_id_for_dvach', threadIdForDvach); // This is Dvach's 'thread' field in API /user/posting
   formData.append('comment', comment);
 
   if (parentPostNumForDvach) {
-    formData.append('parent_num_for_dvach', parentPostNumForDvach); 
+    formData.append('parent_num_for_dvach', parentPostNumForDvach); // This is Dvach's 'parent' field in API /user/posting
   }
   if (useSage) {
-    formData.append('email', 'sage');
+    formData.append('email', 'sage'); // Dvach uses 'email' field for sage
   }
   if (file) {
     formData.append('file', file, file.name);
@@ -227,7 +247,7 @@ export async function postWithSessionCookie(
     response = await fetch('/api/dvach-post', {
       method: 'POST',
       headers: {
-        'X-User-Agent': userAgent,
+        'X-User-Agent': userAgent, // Pass user agent to serverless function
       },
       body: formData, 
     });
@@ -242,38 +262,44 @@ export async function postWithSessionCookie(
   try {
     responseBodyText = await response.text();
     if (!responseBodyText) {
-        const errorDetail = `Status: ${response.status} ${response.statusText}. Response body was empty.`;
+        const errorDetail = `Status: ${response.status} ${response.statusText}. Response body was empty from /api/dvach-post.`;
         if (!response.ok) throw new Error(`Serverless function /api/dvach-post error: ${errorDetail}`);
-        throw new Error(`Serverless function /api/dvach-post returned OK but with an empty response body. Check serverless logs.`);
+        // This case might indicate an issue with the serverless function itself if it returns 200 OK with empty body.
+        throw new Error(`Serverless function /api/dvach-post returned OK but with an empty response body. Check serverless logs for /api/dvach-post.`);
     }
     responseData = JSON.parse(responseBodyText);
   } catch (e) {
     console.error(`[dvachService/postWithSessionCookie] Error processing /api/dvach-post response. Status: ${response.status}. Text: "${responseBodyText.substring(0,500)}". Parse/Error:`, e);
-    const baseErrorMsg = `Serverless function /api/dvach-post error. Status: ${response.status} ${response.statusText}. Raw response: ${responseBodyText.substring(0,200)}.`;
-    if (response.ok && e instanceof SyntaxError) {
+    const baseErrorMsg = `Serverless function /api/dvach-post error. Status: ${response.status} ${response.statusText}. Raw response from /api/dvach-post: ${responseBodyText.substring(0,200)}.`;
+    if (response.ok && e instanceof SyntaxError) { // If serverless returns 200 OK but body is not JSON
         throw new Error(`${baseErrorMsg} Response was not valid JSON. Error: ${(e as Error).message}`);
-    } else {
+    } else { // Any other error during parsing or if response was not OK
         throw new Error(`${baseErrorMsg} Error: ${(e as Error).message}`);
     }
   }
   
-  if (!response.ok) {
-    const errorMsg = responseData?.reason || responseData?.Error || (responseData?.error?.message) || `Posting failed (via /api/dvach-post). Status ${response.status}.`;
+  // Check the structured response from /api/dvach-post (which should reflect Dvach's actual response or serverless errors)
+  if (!response.ok) { // Serverless function itself returned an error status
+    const errorMsg = responseData?.error?.message || responseData?.reason || responseData?.Error || `Posting failed (via /api/dvach-post). Serverless Status ${response.status}.`;
     console.error(`[dvachService/postWithSessionCookie] Failed to create post via /api/dvach-post. Serverless Status: ${response.status}. Dvach/Serverless Message: ${errorMsg}`, responseData);
     throw new Error(errorMsg); 
   }
   
+  // If serverless status is OK, check Dvach's result within the JSON
   if (responseData && (responseData.result === 0 || responseData.Error || responseData.reason || responseData.error)) {
-    const dvachErrorMsg = responseData.reason || responseData.Error || responseData.error?.message || "Unknown Dvach API error (via /api/dvach-post)";
+    const dvachErrorMsg = responseData.reason || responseData.Error || responseData.error?.message || "Unknown Dvach API error (forwarded by /api/dvach-post)";
     console.error('[dvachService/postWithSessionCookie] Dvach API indicated an error (via /api/dvach-post):', dvachErrorMsg, responseData);
     throw new Error(dvachErrorMsg);
   }
 
-  if (!responseData || (responseData.result !== 1 && !responseData.num && !responseData.target && !responseData.thread)) {
-     console.error('[dvachService/postWithSessionCookie] Post success reported by /api/dvach-post, but response format unexpected or missing post/thread number.', responseData);
-     throw new Error('Post attempt successful (via /api/dvach-post) but Dvach response format was unexpected or lacked a post/thread number.');
+  // If serverless is OK, and Dvach result indicates success (1) or other (like 2 for passcode active)
+  // but expected fields like 'num' or 'thread' are missing.
+  if (!responseData || ((responseData.result !== 1 && responseData.result !== 2) && !responseData.num && !responseData.target && !responseData.thread)) {
+     console.error('[dvachService/postWithSessionCookie] Post success reported by /api/dvach-post, but Dvach response format unexpected or missing post/thread number.', responseData);
+     throw new Error('Post attempt seemed successful (via /api/dvach-post) but Dvach response format was unexpected or lacked a post/thread number.');
   }
 
+  // Ensure returned post/thread numbers are strings
   if (responseData.num) responseData.num = String(responseData.num);
   if (responseData.thread) responseData.thread = String(responseData.thread);
   if (responseData.target) responseData.target = String(responseData.target);
@@ -285,29 +311,52 @@ export async function postWithSessionCookie(
 
 export function extractDvachApiError(error: any): DvachApiError | null {
   if (error && typeof error.message === 'string') {
+    // Attempt to parse if error.message is a JSON string (from serverless function)
     try {
-      const parsedError = JSON.parse(error.message);
-      if (parsedError && typeof parsedError.code === 'number' && typeof parsedError.message === 'string') {
-        return parsedError as DvachApiError;
+      const parsedOuterError = JSON.parse(error.message);
+      // Check if parsedOuterError contains Dvach's error structure
+      if (parsedOuterError && parsedOuterError.error && typeof parsedOuterError.error.code === 'number' && typeof parsedOuterError.error.message === 'string') {
+        return { code: parsedOuterError.error.code, message: parsedOuterError.error.message } as DvachApiError;
       }
-    } catch (e) { /* Not a JSON string */ }
+      if(parsedOuterError && parsedOuterError.result === 0 && (parsedOuterError.reason || parsedOuterError.Error)) {
+        return { code: -1, message: parsedOuterError.reason || parsedOuterError.Error };
+      }
+    } catch (e) { /* Not a JSON string encapsulating another error */ }
 
-    if(error.code !== undefined && error.message !== undefined && typeof error.code === 'number'){
+    // If error object itself has code and message (direct DvachApiError like object)
+    if(typeof error.code === 'number' && typeof error.message === 'string'){
         return { code: error.code, message: error.message };
     }
     
+    // Regex for specific Dvach error patterns in a plain string message
     const match = error.message.match(/Error code (-?\d+)|Dvach API Error \((-?\d+)\)/i);
     if (match) {
       const code = parseInt(match[1] || match[2], 10);
       return { code: code, message: error.message };
     }
+    // If error object directly has Dvach's "result: 0" structure
      if (error.result === 0 && (error.reason || error.Error)) {
-        return { code: -1, message: error.reason || error.Error }; 
+        return { code: -1, message: error.reason || error.Error }; // Use -1 as a generic Dvach error code if specific one isn't available
     }
   }
+  // If error is an object with Dvach's direct error structure (not in message string)
+  if (error && error.error && typeof error.error.code === 'number' && typeof error.error.message === 'string') {
+     return { code: error.error.code, message: error.error.message } as DvachApiError;
+  }
+  if (error && error.result === 0 && (error.reason || error.Error)) {
+     return { code: -1, message: error.reason || error.Error };
+  }
+
   return null;
 }
 
+/**
+ * Converts a base64 string to a File object.
+ * @param base64 The base64 encoded string.
+ * @param filename The desired filename for the File object.
+ * @param mimeType The MIME type of the file.
+ * @returns Promise resolving to a File object.
+ */
 export async function base64ToFile(base64: string, filename: string, mimeType: string): Promise<File> {
   const res = await fetch(`data:${mimeType};base64,${base64}`);
   const blob = await res.blob();
