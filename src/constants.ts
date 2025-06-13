@@ -7,6 +7,7 @@ export const DVACH_DOMAINS: string[] = ["https://2ch.hk", "https://2ch.life", "h
 // App.tsx also references it for display in settings.
 export const DEFAULT_CORS_ANYWHERE_PROXY = "https://cors-anywhere.com/"; 
 export const PROXY_URL_GO_X2U_BASE = "https://go.x2u.in/proxy?email=early4@punkproof.com&apiKey=d97e1643&url=";
+export const PROXY_URL_CODETABS_BASE = "https://api.codetabs.com/v1/proxy?quest=";
 
 
 // Keys for localStorage items, used in App.tsx
@@ -16,7 +17,7 @@ export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.3_m
 export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1"; // No change, structure is same
 
 
-export const APP_VERSION = "2.7.0"; // Updated version for media proxy and analysis enhancements
+export const APP_VERSION = "2.7.1"; 
 export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
 

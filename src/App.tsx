@@ -14,7 +14,7 @@ import {
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
   GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   PROXY_URL_GO_X2U_BASE, DEFAULT_CORS_ANYWHERE_PROXY, DVACH_DOMAINS, DEFAULT_USER_AGENT,
-  DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST
+  DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST, PROXY_URL_CODETABS_BASE
 } from './constants';
 import { generateUserAgent } from './utils/userAgentGenerator'; 
 
@@ -22,7 +22,7 @@ import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu, 
   IconSparkles, IconAlertTriangle, IconRefresh, 
   IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat,
-  IconSun, IconMoon // Keep IconSun and IconMoon for the new ThemeIcon component
+  IconSun, IconMoon 
 } from './components/Icons'; 
 
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
@@ -38,8 +38,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   proxyModeForGET: 'vercel_serverless', 
   customProxyUrlForGET: "", 
   
-  proxyModeForImagesGET: 'custom_cors_anywhere', // Default to cors-anywhere for images
-  customProxyUrlForImagesGET: DEFAULT_CORS_ANYWHERE_PROXY,    // Default to cors-anywhere for images
+  proxyModeForImagesGET: 'custom_codetabs', // Default to CodeTabs for images
+  customProxyUrlForImagesGET: PROXY_URL_CODETABS_BASE,    
 
   userAgent: DEFAULT_USER_AGENT,
 
@@ -47,18 +47,17 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiAnalyzeAnonMedia: false,
   geminiReplyWithGeneratedImage: false, 
   maxImagesToAnalyzePerPost: DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST,
-  analyzeVideosInTriggerPosts: false, // Video analysis not yet implemented
+  analyzeVideosInTriggerPosts: false, 
   
-  // Autonomous Bot specific settings
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
-  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда (например, Двач). Твой стиль — остроумный, проницательный, краткий, типичный для таких сайтов. **ОТВЕЧАЙ ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.** Формат твоего ответа: ЕСЛИ цитируешь пост, НАЧНИ с '>>НОМЕР_ПОСТА\\n', ЗАТЕМ твой текст. ЕСЛИ НЕ цитируешь, просто твой текст. НЕ добавляй никаких пояснений, вступлений, заключений или мета-комментариев о своем ответе или задании. Только сам ответ. Анализируй предоставленный контекст треда и изображения (если даны).",
+  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда. Твой стиль — остроумный, проницательный, краткий. **ОТВЕЧАЙ ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.** Если цитируешь пост, НАЧНИ с '>>НОМЕР_ПОСТА\\n', ЗАТЕМ твой текст. Если НЕ цитируешь, просто твой текст. НЕ ИСПОЛЬЗУЙ мета-комментарии, вступления или заключения. Только сам ответ. Анализируй контекст и изображения.",
   botAnalyzesImagesInTriggerPosts: true,
   autonomousBotReplyMode: 'random_in_thread', 
   autonomousBotCycleIntervalSeconds: 75, 
 
 
-  geminiSystemInstruction: "You are a witty and insightful anonymous user on the 2ch.hk imageboard. Your replies should be relevant, concise, and in the typical style of the board. If quoting, use '>>POST_NUMBER\\n'.", // For manual replies
+  geminiSystemInstruction: "You are a witty and insightful anonymous user on an imageboard. Your replies should be relevant, concise, and in the typical style of the board. If quoting, use '>>POST_NUMBER\\n'. No meta-comments.", 
   geminiTemperature: 0.8,
   geminiTopP: 0.95,
   geminiTopK: 40,
@@ -77,37 +76,31 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   prefilledPostTargets: "", 
 };
 
-// Simplified buildProxiedUrl, primarily for thread data when using vercel_serverless for threads
-// or as a general helper for other proxy modes if a specific media proxy isn't used.
+
 function buildProxiedGetUrlForApp(
   targetUrl: string, 
-  proxyMode: ProxyModeForGET, // Typically settings.proxyModeForGET for thread data
-  customProxyUrl?: string   // Typically settings.customProxyUrlForGET for thread data
+  proxyMode: ProxyModeForGET, 
+  customProxyUrl?: string   
 ): string {
   if (!targetUrl.startsWith('http')) { 
-    // This might be an internal API path like /api/get-thread, which doesn't need proxying here.
-    // Or it's an incomplete URL.
-    if (!targetUrl.startsWith('/api/')) { // only warn if not an api path
+    if (!targetUrl.startsWith('/api/')) { 
         console.warn(`[App/buildProxiedGetUrlForApp] targetUrl '${targetUrl}' is not a full HTTP/S URL. Returning as is.`);
     }
     return targetUrl;
   }
   
-  // If mode is vercel_serverless, this function should ideally not be called for external URLs.
-  // /api/get-thread is handled by dvachService which forms its own path.
-  // This check is more for if it *is* called with vercel_serverless for an external URL.
   if (proxyMode === 'vercel_serverless') { 
       console.warn(`[App/buildProxiedGetUrlForApp] 'vercel_serverless' proxy mode was passed for external URL '${targetUrl}'. This mode is for internal /api/get-thread. Trying custom URL if provided, or direct fetch.`);
-      if (customProxyUrl) { // Attempt to use the general custom proxy if available in this odd case
+      if (customProxyUrl) { 
         if (customProxyUrl.startsWith(PROXY_URL_GO_X2U_BASE.split('?')[0])) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
+        if (customProxyUrl.startsWith(PROXY_URL_CODETABS_BASE.split('?')[0])) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
         if (customProxyUrl.includes(DEFAULT_CORS_ANYWHERE_PROXY.split('/')[2])) return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
         if (customProxyUrl.endsWith('=')) return `${customProxyUrl}${encodeURIComponent(targetUrl)}`; 
         return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`; 
       }
-      return targetUrl; // Fallback to direct (likely CORS fail)
+      return targetUrl; 
   }
 
-  // Logic for other proxy modes (custom_go_x2u, custom_cors_anywhere, etc.)
   switch (proxyMode) {
     case 'custom_go_x2u':
       const goX2UBase = (customProxyUrl || PROXY_URL_GO_X2U_BASE);
@@ -115,6 +108,9 @@ function buildProxiedGetUrlForApp(
     case 'custom_cors_anywhere':
       const corsBase = (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY).endsWith('/') ? (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY) : `${(customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY)}/`;
       return `${corsBase}${targetUrl}`;
+    case 'custom_codetabs':
+      const codeTabsBase = (customProxyUrl || PROXY_URL_CODETABS_BASE); // Ensure customProxyUrl ends with '=' if overriding
+      return `${codeTabsBase}${encodeURIComponent(targetUrl)}`;
     case 'custom_general_prefix':
       if (!customProxyUrl) return targetUrl;
       return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
@@ -142,7 +138,6 @@ const formatLogDataForDisplay = (data: unknown): string => {
       typeof value === 'bigint' ? value.toString() : value;
     
     if (typeof data === 'object' && data !== null) {
-        // For GeminiDvachConversation, print only key fields to avoid logging huge histories or chat instances
         if ('botSystemPromptUsed' in data && 'triggerPostNum' in data && 'id' in data) {
             const convo = data as GeminiDvachConversation;
             return `GeminiDvachConversation (ID: ${convo.id}, Trigger: >>${convo.triggerPostNum}, Status: ${convo.status}, LastBotReply: >>${convo.lastBotReplyNum || 'N/A'}, Hist: ${convo.history?.length || 0})`;
@@ -345,7 +340,6 @@ const App: React.FC = () => {
     if (!isBotCycle) setCurrentFetchedDvachPosts([]); 
     try {
       if(!isBotCycle) addLog(`Fetching thread /${boardToFetch}/${threadToFetch}... Proxy for GET (thread data): ${settings.proxyModeForGET}`, 'dvach');
-      // getThreadData uses settings.proxyModeForGET and settings.customProxyUrlForGET internally
       const data: DvachThreadResponse = await getThreadData(boardToFetch, threadToFetch, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent);
       
       const posts = data.threads?.[0]?.posts || [];
@@ -353,7 +347,6 @@ const App: React.FC = () => {
         setCurrentFetchedDvachPosts(posts); 
         addLog(`Successfully fetched ${posts.length} posts from /${boardToFetch}/${threadToFetch}.`, 'success');
         if (threadPostsContainerRef.current) threadPostsContainerRef.current.scrollTop = 0;
-        // Update general settings if manual fetch was successful, so user doesn't have to re-type
         if (!isBotCycle && (settings.board !== boardToFetch || settings.threadId !== threadToFetch)) {
             handleUpdateSettings({ board: boardToFetch, threadId: threadToFetch });
         }
@@ -475,7 +468,6 @@ const App: React.FC = () => {
 
   const handleSimplePost = async () => { 
     try {
-      // For manual post, threadId '0' means new thread.
       const threadTargetForDvach = currentThreadId && currentThreadId !== "0" ? currentThreadId : "0";
       await commonPostToDvach(postText, postFile, postUseSage, currentBoard, threadTargetForDvach, undefined);
       setPostText('');
@@ -516,10 +508,10 @@ const App: React.FC = () => {
 
     if (targetPost.files && targetPost.files.length > 0) {
         const analysisEnabled = (settings.geminiAnalyzeOpMedia && targetPost.op === 1) || 
-                                (settings.geminiAnalyzeAnonMedia && targetPost.op !== 1 && targetPost.num !== currentThreadId); // Adjusted logic for non-OP
+                                (settings.geminiAnalyzeAnonMedia && targetPost.op !== 1 && targetPost.num !== currentThreadId);
         if (analysisEnabled) {
             imageFilesToAnalyze = targetPost.files
-                .filter(file => file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9) // jpg, png, gif, webp (image types)
+                .filter(file => file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9) 
                 .slice(0, settings.maxImagesToAnalyzePerPost);
         }
     }
@@ -534,7 +526,7 @@ const App: React.FC = () => {
 
                 const imageResponse = await fetch(proxiedImageUrl);
                 if (!imageResponse.ok) {
-                    const errorDetail = `Proxy error: ${imageResponse.status} ${imageResponse.statusText}. Check proxy settings or proxy server status. If using cors-anywhere, ensure it's activated.`;
+                    const errorDetail = `Proxy error: ${imageResponse.status} ${imageResponse.statusText}. Check proxy settings or proxy server status.`;
                     addLog(`Failed to fetch image "${dvachImageFile.name}" via proxy ${proxiedImageUrl}. ${errorDetail}`, 'warning', {status: imageResponse.status, statusText: imageResponse.statusText});
                     throw new Error(`Failed to fetch image via proxy: ${imageResponse.status} ${imageResponse.statusText}`);
                 }
@@ -543,7 +535,7 @@ const App: React.FC = () => {
                 let mimeType = dvachImageFile.type === 1 ? 'image/jpeg' : 
                                dvachImageFile.type === 2 ? 'image/png' : 
                                dvachImageFile.type === 4 ? 'image/gif' : 
-                               dvachImageFile.type === 9 ? 'image/webp' : // webp
+                               dvachImageFile.type === 9 ? 'image/webp' : 
                                imageBlob.type; 
                 if (!mimeType.startsWith('image/')) mimeType = 'image/jpeg'; 
 
@@ -572,7 +564,7 @@ const App: React.FC = () => {
           systemInstruction: systemInstructionForReply,
           temperature: settings.geminiTemperature, topP: settings.geminiTopP, 
           topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
-          ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget }})
+          thinkingConfig: { thinkingBudget: settings.useThinkingBudget ? settings.geminiThinkingBudget : 0 }
         }
       });
       geminiReplyText = response.text || ""; 
@@ -604,7 +596,6 @@ const App: React.FC = () => {
             }
         }
       }
-      // currentThreadId here is the OP post number of the thread the targetPost belongs to.
       const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, currentBoard, currentThreadId, targetPost.num);
       
       setSentMessages(prev => prev.map(msg => 
@@ -654,9 +645,18 @@ const App: React.FC = () => {
 
         if (settings.autonomousBotReplyMode === 'random_in_thread') {
             const eligiblePosts = latestPostsInThread.filter(p => {
-                const isByBot = sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === settings.autonomousBotTargetBoard && sm.thread === settings.autonomousBotTargetThreadId);
-                const alreadyInActiveConvo = Array.from(newConversationsMap.values()).some(convo => convo.participatingPostNumbers.includes(p.num) || convo.triggerPostNum === p.num);
-                return !isByBot && !alreadyInActiveConvo;
+                const isSentByThisBotInstance = sentMessages.some(sm => 
+                    sm.num === p.num && 
+                    sm.isGeminiPost && 
+                    sm.board === settings.autonomousBotTargetBoard && 
+                    sm.thread === settings.autonomousBotTargetThreadId
+                );
+                if (isSentByThisBotInstance) return false;
+
+                const convoIdForThisPostAsTrigger = `${settings.autonomousBotTargetBoard}-${settings.autonomousBotTargetThreadId}-trigger-${p.num}`;
+                if (newConversationsMap.has(convoIdForThisPostAsTrigger)) return false;
+                
+                return true; 
             });
 
             if (eligiblePosts.length > 0) {
@@ -664,8 +664,9 @@ const App: React.FC = () => {
                 addAutonomousBotActivityLog(`Бот выбрал случайный пост >>${randomPostToReply.num} для ответа.`);
                 
                 const convoId = `${settings.autonomousBotTargetBoard}-${settings.autonomousBotTargetThreadId}-trigger-${randomPostToReply.num}`;
+                // This check is slightly redundant due to filter above, but safe
                 if (newConversationsMap.has(convoId)) { 
-                    addAutonomousBotActivityLog(`Разговор с >>${randomPostToReply.num} уже существует, пропускаем для случайного ответа.`, 'bot_warning');
+                    addAutonomousBotActivityLog(`Разговор с >>${randomPostToReply.num} уже существует (лог избыточен, фильтр должен был отсеять).`, 'bot_warning');
                 } else {
                     setAutonomousBotStatus(`Подготовка ответа на случайный пост >>${randomPostToReply.num}`);
                                         
@@ -686,7 +687,6 @@ const App: React.FC = () => {
                     const initialUserMessageParts: Part[] = [];
                     let initialContextForStorage: GeminiDvachConversation['initialContext'] = { targetPostText: randomPostToReply.comment.replace(/<[^>]*>?/gm, '') };
 
-                    // Analyze OP image(s)
                     if (settings.geminiAnalyzeOpMedia && opPost?.files?.length) {
                         const opImagesToAnalyze = opPost.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, settings.maxImagesToAnalyzePerPost);
                         if (opImagesToAnalyze.length > 0) {
@@ -715,7 +715,6 @@ const App: React.FC = () => {
                     initialContextForStorage.opPostText = opPost?.comment.replace(/<[^>]*>?/gm, '');
                     initialContextForStorage.precedingPostsText = postsBeforeTarget.map(p => p.comment.replace(/<[^>]*>?/gm, ''));
 
-                    // Analyze Target Post image(s)
                     if (settings.botAnalyzesImagesInTriggerPosts && randomPostToReply.files?.length) {
                          const targetImagesToAnalyze = randomPostToReply.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, settings.maxImagesToAnalyzePerPost);
                          if (targetImagesToAnalyze.length > 0) {
@@ -749,7 +748,7 @@ const App: React.FC = () => {
                         config: {
                             systemInstruction: settings.autonomousBotSystemPrompt,
                             temperature: 0.85, topK: 40, topP: 0.95, maxOutputTokens: 512, 
-                            ...(settings.useThinkingBudget && { thinkingConfig: { thinkingBudget: settings.geminiThinkingBudget } })
+                            thinkingConfig: { thinkingBudget: settings.useThinkingBudget ? settings.geminiThinkingBudget : 0 }
                         },
                         history: [] 
                     }); 
@@ -761,7 +760,9 @@ const App: React.FC = () => {
                     let botReplyText = rawBotReplyText.trim();
                     const leadingPostNumRegex = /^(?:>>\d+\s*)/; 
                     botReplyText = botReplyText.replace(leadingPostNumRegex, '').trim();
-                    botReplyText = `>>${randomPostToReply.num}\n${botReplyText}`; 
+                    if (!botReplyText.startsWith(`>>${randomPostToReply.num}`)) {
+                         botReplyText = `>>${randomPostToReply.num}\n${botReplyText}`; 
+                    }
                     
                     addAutonomousBotActivityLog(`Бот сгенерировал ответ для >>${randomPostToReply.num}: ${botReplyText.substring(0,70)}...`);
                     
@@ -796,7 +797,7 @@ const App: React.FC = () => {
                         threadId: settings.autonomousBotTargetThreadId,
                         triggerPostNum: randomPostToReply.num,
                         botSystemPromptUsed: settings.autonomousBotSystemPrompt,
-                        geminiChatInstance: botChat, // Will be stripped for localStorage, used in-memory for active sessions
+                        geminiChatInstance: botChat, 
                         history: [
                           { 
                             id: `bot-user-msg-${currentTimestamp -1}`, 
@@ -839,7 +840,8 @@ const App: React.FC = () => {
                 }
             } else { addAutonomousBotActivityLog("Нет подходящих постов для случайного ответа в этом цикле.", 'bot_activity'); }
         } else if (settings.autonomousBotReplyMode === 'replies_to_bot') {
-            // ... existing logic for replies_to_bot, ensure image analysis uses new settings and multi-image logic
+            // TODO: Implement 'replies_to_bot' logic fully, including image analysis using settings
+            addAutonomousBotActivityLog("Режим 'replies_to_bot' еще не полностью реализован в этой итерации.", 'bot_warning');
         }
 
         if (botMadeAPostThisCycle) {
@@ -857,8 +859,7 @@ const App: React.FC = () => {
     
     addLog(`Autonomous bot started. Interval: ${settings.autonomousBotCycleIntervalSeconds}s. Mode: ${settings.autonomousBotReplyMode}. Target: /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}`, 'bot_setup');
     setAutonomousBotStatus("Активен - Первый цикл скоро начнется...");
-    // Initial run then interval
-    setTimeout(runBotCycle, 5000); // Initial delay before first cycle
+    setTimeout(runBotCycle, 5000); 
     autonomousBotIntervalRef.current = setInterval(runBotCycle, settings.autonomousBotCycleIntervalSeconds * 1000) as unknown as number;
 
     return () => {
@@ -879,7 +880,6 @@ const App: React.FC = () => {
   const ThemeIconComponent: React.FC<React.SVGProps<SVGSVGElement>> = (props) => {
     if (settings.theme === 'dark') return <IconMoon {...props} />;
     if (settings.theme === 'light') return <IconSun {...props} />;
-    // System theme
     const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
     return prefersDark ? <IconMoon {...props} /> : <IconSun {...props} />;
   };
@@ -933,7 +933,6 @@ const App: React.FC = () => {
           {post.files.map((file, fileIndex) => {
             const fileUrl = `${DVACH_DOMAINS[0]}${file.path}`;
             const thumbUrl = `${DVACH_DOMAINS[0]}${file.thumbnail}`;
-            // Use image proxy for thumbs if enabled
             const proxiedThumbUrl = buildProxiedGetUrlForApp(thumbUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
 
             return (
@@ -945,8 +944,8 @@ const App: React.FC = () => {
                 loading="lazy"
                 onError={(e) => { 
                     addLog(`Failed to load thumbnail via proxy '${settings.proxyModeForImagesGET}': ${proxiedThumbUrl} (original: ${thumbUrl}). Attempting direct.`, 'warning');
-                    (e.target as HTMLImageElement).src = thumbUrl; // Fallback to direct URL on error
-                    (e.target as HTMLImageElement).onerror = null; // Prevent infinite loop
+                    (e.target as HTMLImageElement).src = thumbUrl; 
+                    (e.target as HTMLImageElement).onerror = null; 
                 }}
               />
               <div className="absolute bottom-0 left-0 bg-black bg-opacity-50 text-white text-xs p-0.5 truncate w-full group-hover:opacity-100 opacity-0 transition-opacity">
@@ -981,7 +980,6 @@ const App: React.FC = () => {
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400 border-b pb-2 border-gray-300 dark:border-gray-700">Dvach Manual Operations</h2>
       
-      {/* Dvach Auth Status & Login/Logout */}
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
         <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Dvach Authentication</h3>
         {dvachSessionCookies?.passcode_auth ? (
@@ -1006,7 +1004,6 @@ const App: React.FC = () => {
          {fetchError && (fetchError.includes("Login failed") || fetchError.includes("Dvach login error") || fetchError.includes("session cookie")) && <p className="text-xs text-red-500 mt-1">{fetchError}</p>}
       </div>
 
-      {/* Manual Post Section */}
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
         <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Manual Post</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
@@ -1055,7 +1052,6 @@ const App: React.FC = () => {
         {fetchError && (fetchError.includes("Failed to post") || fetchError.includes("Board and Post Comment")) && <p className="text-xs text-red-500 mt-1">{fetchError}</p>}
       </div>
 
-      {/* Thread Viewer Section */}
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
         <div className="flex justify-between items-center mb-3">
             <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Thread Viewer & Gemini Reply</h3>
@@ -1101,7 +1097,7 @@ const App: React.FC = () => {
                 title={
                     !ai ? "Gemini AI not initialized (check API key)" : 
                     !dvachSessionCookies?.passcode_auth ? "Not logged into Dvach" : 
-                    (!settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) ? "Bot target board/thread not set in Settings" :
+                    (!settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) ? "Bot target board/thread not set (see below or in Settings)" :
                     autonomousBotActive ? "Stop Bot" : "Start Bot"
                 }
             >
@@ -1110,6 +1106,32 @@ const App: React.FC = () => {
             </button>
         </div>
       </div>
+      
+      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
+        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Bot Target Configuration</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Set the board and thread ID for the autonomous bot to operate in. These settings are also available in the main Settings tab.</p>
+        <div>
+            <label htmlFor="botPanelTargetBoard" className="block text-sm font-medium">Bot Target Board (e.g., b):</label>
+            <input 
+                id="botPanelTargetBoard" 
+                type="text" 
+                value={settings.autonomousBotTargetBoard} 
+                onChange={e => handleUpdateSettings({ autonomousBotTargetBoard: e.target.value })} 
+                className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500"
+            />
+        </div>
+        <div>
+            <label htmlFor="botPanelTargetThreadId" className="block text-sm font-medium">Bot Target Thread ID:</label>
+            <input 
+                id="botPanelTargetThreadId" 
+                type="text" 
+                value={settings.autonomousBotTargetThreadId} 
+                onChange={e => handleUpdateSettings({ autonomousBotTargetThreadId: e.target.value })} 
+                className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-purple-500"
+            />
+        </div>
+      </div>
+
 
        {(!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) &&
         <div className="p-3 bg-yellow-100 dark:bg-yellow-800 border-l-4 border-yellow-500 text-yellow-700 dark:text-yellow-200 rounded-md text-sm">
@@ -1117,7 +1139,7 @@ const App: React.FC = () => {
             <ul className="list-disc list-inside ml-4 text-xs">
                 {!ai && <li>Gemini AI not initialized (check API key in Settings).</li>}
                 {!dvachSessionCookies?.passcode_auth && <li>Not logged into Dvach (login on Manual Ops tab).</li>}
-                {(!settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) && <li>Bot's target board/thread ID not set (check Bot Configuration in Settings).</li>}
+                {(!settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) && <li>Bot's target board/thread ID not set (see fields above or in Settings).</li>}
             </ul>
         </div>
       }
@@ -1126,7 +1148,7 @@ const App: React.FC = () => {
         <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Bot Status & Activity</h3>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Current Status: <span className="font-semibold">{autonomousBotStatus}</span></p>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-            Target: <span className="font-semibold">/{settings.autonomousBotTargetBoard}/{settings.autonomousBotTargetThreadId}</span> | 
+            Target: <span className="font-semibold">/{settings.autonomousBotTargetBoard || "[Not Set]"}/{settings.autonomousBotTargetThreadId || "[Not Set]"}</span> | 
             Mode: <span className="font-semibold">{settings.autonomousBotReplyMode.replace(/_/g, ' ')}</span> | 
             Interval: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}s</span>
         </p>
@@ -1170,7 +1192,7 @@ const App: React.FC = () => {
             <IconTrash className="mr-1 h-4 w-4"/> Clear All Tracked Conversations
         </button>
       </div>
-       <p className="text-xs text-gray-500 dark:text-gray-400">Bot settings can be configured in the main "Settings" tab under "Autonomous Bot Configuration".</p>
+       <p className="text-xs text-gray-500 dark:text-gray-400">Other bot settings (persona, reply mode, image analysis) can be configured in the main "Settings" tab.</p>
     </div>
   );
 
@@ -1178,15 +1200,14 @@ const App: React.FC = () => {
      <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Application Settings</h2>
       
-      {/* Dvach Configuration (Manual Ops Tab) */}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
-        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Dvach Configuration (Manual Ops Tab & Bot Default)</h3>
+        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Dvach Configuration (Manual Ops Tab Defaults)</h3>
         <div>
-          <label htmlFor="settingsBoard" className="block text-sm font-medium">Default Board (e.g., b):</label>
+          <label htmlFor="settingsBoard" className="block text-sm font-medium">Default Board for Manual Ops (e.g., b):</label>
           <input id="settingsBoard" type="text" value={settings.board} onChange={e => handleUpdateSettings({board: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
         </div>
         <div>
-          <label htmlFor="settingsThreadId" className="block text-sm font-medium">Default Thread ID (0 for new thread):</label>
+          <label htmlFor="settingsThreadId" className="block text-sm font-medium">Default Thread ID for Manual Ops (0 for new thread):</label>
           <input id="settingsThreadId" type="text" value={settings.threadId} onChange={e => handleUpdateSettings({threadId: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
         </div>
         <div>
@@ -1204,7 +1225,6 @@ const App: React.FC = () => {
         </div>
       </div>
       
-      {/* Proxy for Dvach GET Requests (Thread Data) */}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Proxy for Dvach GET Requests (Thread Data)</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400">Used by "Fetch Thread" in Manual Ops and by Bot for thread monitoring. POSTs use serverless /api/dvach-post.</p>
@@ -1213,17 +1233,19 @@ const App: React.FC = () => {
             onChange={e => {
                 const mode = e.target.value as ProxyModeForGET;
                 let newCustomUrl = settings.customProxyUrlForGET;
-                if (mode === 'custom_go_x2u' && (!newCustomUrl || newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY)) newCustomUrl = PROXY_URL_GO_X2U_BASE;
-                else if (mode === 'custom_cors_anywhere' && (!newCustomUrl || newCustomUrl === PROXY_URL_GO_X2U_BASE)) newCustomUrl = DEFAULT_CORS_ANYWHERE_PROXY;
+                if (mode === 'custom_go_x2u' && (newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY || newCustomUrl === PROXY_URL_CODETABS_BASE || !newCustomUrl )) newCustomUrl = PROXY_URL_GO_X2U_BASE;
+                else if (mode === 'custom_cors_anywhere' && (newCustomUrl === PROXY_URL_GO_X2U_BASE || newCustomUrl === PROXY_URL_CODETABS_BASE || !newCustomUrl)) newCustomUrl = DEFAULT_CORS_ANYWHERE_PROXY;
+                else if (mode === 'custom_codetabs' && (newCustomUrl === PROXY_URL_GO_X2U_BASE || newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY || !newCustomUrl)) newCustomUrl = PROXY_URL_CODETABS_BASE;
                 else if (mode === 'vercel_serverless' || mode === 'none') newCustomUrl = ""; 
                 handleUpdateSettings({ proxyModeForGET: mode, customProxyUrlForGET: newCustomUrl });
             }}  
             className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500">
-            <option value="vercel_serverless">Vercel Serverless (/api/get-thread) (Recommended for thread data)</option>
-            <option value="custom_go_x2u">Custom: go.x2u.in Format (e.g., ...&amp;url=)</option>
-            <option value="custom_cors_anywhere">Custom: cors-anywhere.com Format (e.g., .../)</option>
-            <option value="custom_general_prefix">Custom: General Prefix URL (e.g., https://myproxy.com/)</option>
-            <option value="custom_general_param">Custom: General Parameter URL (e.g., ...?url=)</option>
+            <option value="vercel_serverless">Vercel Serverless (/api/get-thread) (Recommended)</option>
+            <option value="custom_codetabs">Custom: CodeTabs Format (api.codetabs.com)</option>
+            <option value="custom_go_x2u">Custom: go.x2u.in Format</option>
+            <option value="custom_cors_anywhere">Custom: cors-anywhere.com Format</option>
+            <option value="custom_general_prefix">Custom: General Prefix URL</option>
+            <option value="custom_general_param">Custom: General Parameter URL</option>
             <option value="none">No Proxy (May not work due to CORS)</option></select></div>
         {(settings.proxyModeForGET.startsWith('custom_') ) && ( 
           <div><label htmlFor="settingsCustomProxyUrlForGET" className="block text-sm font-medium">Custom Proxy URL Base for Thread Data GET:</label>
@@ -1231,14 +1253,13 @@ const App: React.FC = () => {
               onChange={e => handleUpdateSettings({customProxyUrlForGET: e.target.value})} 
               className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                E.g., for go.x2u format: <code>{PROXY_URL_GO_X2U_BASE.replace('YOUR_API_KEY_HERE&', '')}</code> (replace with your key).
-                For cors-anywhere: <code>{DEFAULT_CORS_ANYWHERE_PROXY}</code> or your own instance.
+                E.g., for CodeTabs: <code>{PROXY_URL_CODETABS_BASE}</code>. For go.x2u: <code>{PROXY_URL_GO_X2U_BASE}</code>.
+                For cors-anywhere: <code>{DEFAULT_CORS_ANYWHERE_PROXY}</code>.
                 Ensure prefix proxies end with '/' and param proxies end with '='.
             </p>
             </div>)}
       </div>
 
-      {/* Proxy for Image/Media GET Requests */}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Proxy for Image/Media GET Requests</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400">Used by Manual Reply and Bot for fetching images/media for Gemini analysis and for displaying thumbnails in Thread Viewer.</p>
@@ -1247,12 +1268,14 @@ const App: React.FC = () => {
             onChange={e => {
                 const mode = e.target.value as ProxyModeForGET;
                 let newCustomUrl = settings.customProxyUrlForImagesGET;
-                if (mode === 'custom_go_x2u' && (!newCustomUrl || newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY || newCustomUrl === "")) newCustomUrl = PROXY_URL_GO_X2U_BASE;
-                else if (mode === 'custom_cors_anywhere' && (!newCustomUrl || newCustomUrl === PROXY_URL_GO_X2U_BASE || newCustomUrl === "")) newCustomUrl = DEFAULT_CORS_ANYWHERE_PROXY;
+                if (mode === 'custom_codetabs' && (newCustomUrl === PROXY_URL_GO_X2U_BASE || newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY || !newCustomUrl)) newCustomUrl = PROXY_URL_CODETABS_BASE;
+                else if (mode === 'custom_go_x2u' && (newCustomUrl === DEFAULT_CORS_ANYWHERE_PROXY || newCustomUrl === PROXY_URL_CODETABS_BASE || !newCustomUrl )) newCustomUrl = PROXY_URL_GO_X2U_BASE;
+                else if (mode === 'custom_cors_anywhere' && (newCustomUrl === PROXY_URL_GO_X2U_BASE || newCustomUrl === PROXY_URL_CODETABS_BASE || !newCustomUrl)) newCustomUrl = DEFAULT_CORS_ANYWHERE_PROXY;
                 else if (mode === 'none') newCustomUrl = ""; 
                 handleUpdateSettings({ proxyModeForImagesGET: mode, customProxyUrlForImagesGET: newCustomUrl });
             }}  
             className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500">
+            <option value="custom_codetabs">CodeTabs (api.codetabs.com/v1/proxy?quest=)</option>
             <option value="custom_cors_anywhere">Cors-Anywhere (Public or Custom)</option>
             <option value="custom_go_x2u">Go.x2u.in Format (Public or Custom)</option>
             <option value="custom_general_prefix">Custom: General Prefix URL</option>
@@ -1264,16 +1287,15 @@ const App: React.FC = () => {
               onChange={e => handleUpdateSettings({customProxyUrlForImagesGET: e.target.value})} 
               className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                E.g., for cors-anywhere: <code>{DEFAULT_CORS_ANYWHERE_PROXY}</code>. For go.x2u: <code>{PROXY_URL_GO_X2U_BASE}</code>.
+                E.g., for CodeTabs: <code>{PROXY_URL_CODETABS_BASE}</code>. For cors-anywhere: <code>{DEFAULT_CORS_ANYWHERE_PROXY}</code>.
             </p>
             </div>)}
           <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
             <IconAlertTriangle className="inline h-4 w-4 mr-1 align-text-bottom"/>
-            Public proxies (like the default cors-anywhere.com or go.x2u.in) can be unreliable. `cors-anywhere.com` often requires visiting its main page to activate the demo. For consistent image analysis, consider setting up your own CORS proxy.
+            Public proxies can be unreliable. `cors-anywhere.com` often requires visiting its main page to activate. For consistent image analysis, consider setting up your own CORS proxy.
           </p>
       </div>
 
-      {/* Gemini API Configuration */}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Gemini API Configuration</h3>
         <select aria-label="Gemini API Key Source" value={settings.geminiApiKeySource} onChange={e => handleUpdateSettings({geminiApiKeySource: e.target.value as 'env' | 'user'})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500">
@@ -1295,7 +1317,6 @@ const App: React.FC = () => {
         {settings.useThinkingBudget && <div><label htmlFor="geminiThinkingBudget" className="block text-xs font-medium">Thinking Budget (ms):</label><input id="geminiThinkingBudget" type="number" step="100" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} className="mt-1 w-1/2 p-1.5 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600"/></div>}
       </div>
 
-      {/* Gemini-Dvach Interaction (Global) */}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-2">
          <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Gemini-Dvach Interaction (Global)</h3>
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({geminiAnalyzeOpMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>Manual Reply: Gemini Considers Media in OP Post</label>
@@ -1308,11 +1329,10 @@ const App: React.FC = () => {
         <label className="flex items-center text-sm"><input type="checkbox" checked={settings.analyzeVideosInTriggerPosts} onChange={e => handleUpdateSettings({analyzeVideosInTriggerPosts: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500" disabled/>Analyze Videos in Posts (Bot & Manual - Not Yet Implemented)</label>
       </div>
 
-      {/* Autonomous Bot Configuration */}
        <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
         <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Autonomous Bot Configuration</h3>
-        <div><label htmlFor="botTargetBoard" className="block text-sm font-medium">Target Board (e.g., b):</label><input id="botTargetBoard" type="text" value={settings.autonomousBotTargetBoard} onChange={e => handleUpdateSettings({autonomousBotTargetBoard: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
-        <div><label htmlFor="botTargetThreadId" className="block text-sm font-medium">Target Thread ID:</label><input id="botTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({autonomousBotTargetThreadId: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+        <div><label htmlFor="botTargetBoard" className="block text-sm font-medium">Bot Target Board (e.g., b):</label><input id="botTargetBoard" type="text" value={settings.autonomousBotTargetBoard} onChange={e => handleUpdateSettings({autonomousBotTargetBoard: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+        <div><label htmlFor="botTargetThreadId" className="block text-sm font-medium">Bot Target Thread ID:</label><input id="botTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({autonomousBotTargetThreadId: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
         <div><label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt/Persona:</label><textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({autonomousBotSystemPrompt: e.target.value})} rows={4} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
         <div><label htmlFor="botReplyMode" className="block text-sm font-medium">Bot Reply Mode:</label>
           <select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e => handleUpdateSettings({autonomousBotReplyMode: e.target.value as AutonomousBotReplyMode})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
@@ -1360,7 +1380,6 @@ const App: React.FC = () => {
     </div>
   );
   
-  // Main App Return
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 font-sans">
       <header className="bg-white dark:bg-gray-800 shadow-md p-4 sticky top-0 z-50">
@@ -1382,7 +1401,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <nav className="bg-gray-50 dark:bg-gray-800 border-b border-t border-gray-200 dark:border-gray-700 sticky top-[72px] z-40"> {/* Adjusted top for header height */}
+      <nav className="bg-gray-50 dark:bg-gray-800 border-b border-t border-gray-200 dark:border-gray-700 sticky top-[72px] z-40"> 
         <div className="container mx-auto flex justify-center sm:justify-start flex-wrap">
           {[
             { id: 'dvach', label: 'Manual Ops', icon: IconCpu },
@@ -1408,7 +1427,7 @@ const App: React.FC = () => {
       </nav>
 
       <main className="container mx-auto p-4 md:p-6" role="main">
-        <div className="mt-2"> {/* Added small margin-top for breathing room after sticky nav */}
+        <div className="mt-2"> 
             {activeTab === 'dvach' && renderDvachBotPanel()}
             {activeTab === 'bot_control' && renderAutonomousBotControlPanel()}
             {activeTab === 'settings' && renderSettingsPanel()}

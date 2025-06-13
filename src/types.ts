@@ -123,6 +123,7 @@ export type ProxyModeForGET =
   | 'vercel_serverless' 
   | 'custom_go_x2u'
   | 'custom_cors_anywhere'
+  | 'custom_codetabs' // New proxy option
   | 'custom_general_prefix'
   | 'custom_general_param'
   | 'none';
@@ -135,8 +136,8 @@ export interface DvachSessionCookies {
 export type AutonomousBotReplyMode = 'replies_to_bot' | 'random_in_thread';
 
 export interface AppSettings {
-  board: string;
-  threadId: string; 
+  board: string; // Default board for manual operations tab
+  threadId: string; // Default thread ID for manual operations tab
   purchasedPasscode: string; 
 
   geminiApiKeySource: 'env' | 'user';
@@ -144,26 +145,25 @@ export interface AppSettings {
 
   theme: 'light' | 'dark' | 'system';
 
-  proxyModeForGET: ProxyModeForGET; // For thread data primarily
-  customProxyUrlForGET: string;    // For thread data if proxyModeForGET is custom
+  proxyModeForGET: ProxyModeForGET; 
+  customProxyUrlForGET: string;    
   
-  proxyModeForImagesGET: ProxyModeForGET; // Specific for images
-  customProxyUrlForImagesGET: string;   // Specific for images if its mode is custom
+  proxyModeForImagesGET: ProxyModeForGET; 
+  customProxyUrlForImagesGET: string;   
   
   userAgent: string; 
 
-  // Gemini specific settings for Dvach interaction
   geminiAnalyzeOpMedia: boolean; 
   geminiAnalyzeAnonMedia: boolean; 
-  geminiReplyWithGeneratedImage: boolean; // For both manual and bot
-  maxImagesToAnalyzePerPost: number; // New setting
-  analyzeVideosInTriggerPosts: boolean; // New setting (UI only for now)
+  geminiReplyWithGeneratedImage: boolean;
+  maxImagesToAnalyzePerPost: number;
+  analyzeVideosInTriggerPosts: boolean; 
 
 
   // Autonomous Bot specific settings
-  autonomousBotTargetBoard: string;
-  autonomousBotTargetThreadId: string;
-  autonomousBotSystemPrompt: string; // User-defined persona/rules
+  autonomousBotTargetBoard: string; // Specific target board for the bot
+  autonomousBotTargetThreadId: string; // Specific target thread for the bot
+  autonomousBotSystemPrompt: string; 
   botAnalyzesImagesInTriggerPosts: boolean; 
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number; 
@@ -174,7 +174,7 @@ export interface AppSettings {
   geminiTopP: number;
   geminiTopK: number;
   geminiMaxOutputTokens: number;
-  geminiResponseMimeType: 'text/plain' | 'application/json'; // Kept for potential future use, bot mainly uses text
+  geminiResponseMimeType: 'text/plain' | 'application/json'; 
   useSearchGrounding: boolean; 
   useThinkingBudget: boolean; 
   geminiThinkingBudget: number;
@@ -229,13 +229,12 @@ export interface GeminiDvachConversation {
   lastBotReplyNum?: string; 
   participatingPostNumbers: string[]; 
   status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived'; 
-  // Added fields for richer context storage if needed
-  initialContext?: { // To store the extensive context that kicked off the conversation
+  initialContext?: { 
     opPostText?: string;
-    opPostImagePreview?: string; // base64 data URL
+    opPostImagePreview?: string; 
     precedingPostsText?: string[];
     targetPostText: string;
-    targetPostImagePreview?: string; // base64 data URL
+    targetPostImagePreview?: string; 
   };
 }
 
