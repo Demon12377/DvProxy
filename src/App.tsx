@@ -741,8 +741,6 @@ useEffect(() => {
                 setCurrentBotOpMediaCache(null);
             }
 
-            let botMadeAPostThisCycle = false;
-
             if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
                 setAutonomousBotStatus("Режим 'random_in_thread': Поиск цели...");
                 const botPostNumbers = sentMessages
@@ -811,7 +809,6 @@ useEffect(() => {
                             }
                             addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${botReplyText.substring(0, 70)}...`);
                             const newPostNum = await commonPostToDvach(botReplyText, null, false, currentBotSettings.autonomousBotTargetBoard, currentBotSettings.autonomousBotTargetThreadId, targetPost.num);
-                            botMadeAPostThisCycle = true;
                             setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: botReplyText, board: currentBotSettings.autonomousBotTargetBoard, thread: currentBotSettings.autonomousBotTargetThreadId, parent: targetPost.num, isGeminiPost: true }, ...prev]);
                             setAutonomousBotStatus(`Ответил как >>${newPostNum} на >>${targetPost.num}`);
                         } else {
