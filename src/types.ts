@@ -1,4 +1,4 @@
-/// <reference types="vite/client" />
+
 import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK } from "@google/genai"; // GeminiChat renamed to GeminiChatInstanceType
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
@@ -120,7 +120,7 @@ export interface SentMessageInfo {
 }
 
 export type ProxyModeForGET =
-  | 'vercel_serverless' // Uses /api/get-thread for thread data, other GETs might need different handling or this mode implies specific proxy for images
+  | 'vercel_serverless' 
   | 'custom_go_x2u'
   | 'custom_cors_anywhere'
   | 'custom_general_prefix'
@@ -129,23 +129,15 @@ export type ProxyModeForGET =
 
 export interface DvachSessionCookies {
   passcode_auth: string | null;
-  usercode: string | null; // Dvach also sets a 'usercode' cookie
+  usercode: string | null; 
 }
 
 export type AutonomousBotReplyMode = 'replies_to_bot' | 'random_in_thread';
-export type AutonomousBotPersonalityPreset =
-  | 'default'
-  | 'concise_witty'
-  | 'elaborate_detailed'
-  | 'slightly_aggressive'
-  | 'sarcastic_ironic'
-  | 'neutral_informative'
-  | 'custom'; // For user-defined modifications later
 
 export interface AppSettings {
   board: string;
-  threadId: string; // Current thread ID user is interacting with
-  purchasedPasscode: string; // This is the user's long-term purchased passcode string.
+  threadId: string; 
+  purchasedPasscode: string; 
 
   geminiApiKeySource: 'env' | 'user';
   userGeminiApiKey: string;
@@ -154,85 +146,90 @@ export interface AppSettings {
 
   proxyModeForGET: ProxyModeForGET;
   customProxyUrlForGET: string;
-  userAgent: string; // User agent for client-side GETs and to pass to serverless
+  userAgent: string; 
 
   // Gemini specific settings for Dvach interaction
-  geminiAnalyzeOpMedia: boolean; // Whether Gemini should consider media in OP post
-  geminiAnalyzeAnonMedia: boolean; // Whether Gemini should consider media in non-OP posts
-  geminiReplyWithGeneratedImage: boolean; // Whether Gemini should attempt to generate an image with its reply
+  geminiAnalyzeOpMedia: boolean; 
+  geminiAnalyzeAnonMedia: boolean; 
+  geminiReplyWithGeneratedImage: boolean; // For both manual and bot
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string;
   autonomousBotTargetThreadId: string;
-  autonomousBotSystemPrompt: string;
-  botAnalyzesImagesInTriggerPosts: boolean; // Specific to autonomous bot
+  autonomousBotSystemPrompt: string; // User-defined persona/rules
+  botAnalyzesImagesInTriggerPosts: boolean; 
   autonomousBotReplyMode: AutonomousBotReplyMode;
-  autonomousBotCycleIntervalSeconds: number; // Interval in seconds
-  autonomousBotPersonalityPreset: AutonomousBotPersonalityPreset;
+  autonomousBotCycleIntervalSeconds: number; 
 
-
-  // Gemini Model Configuration (Mainly for manual replies now, bot uses its own system prompt + preset)
-  geminiSystemInstruction: string; // Default system instruction for manual replies
+  // Gemini Model Configuration (Mainly for manual replies now, bot uses its own system prompt)
+  geminiSystemInstruction: string; 
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
   geminiMaxOutputTokens: number;
-  geminiResponseMimeType: 'text/plain' | 'application/json';
-  useSearchGrounding: boolean; // For generic text gen, if kept
-  useThinkingBudget: boolean; // If false, thinkingBudget is 0
-  geminiThinkingBudget: number; // In milliseconds, 0 disables it (for gemini-2.5-flash-preview-04-17)
+  geminiResponseMimeType: 'text/plain' | 'application/json'; // Kept for potential future use, bot mainly uses text
+  useSearchGrounding: boolean; 
+  useThinkingBudget: boolean; 
+  geminiThinkingBudget: number;
 
 
-  // Repetitive Posting Mode (Advanced/Botting Feature) - Kept for now, might be deprecated
+  // Repetitive Posting Mode (Advanced/Botting Feature) 
   enableRepetitivePostingMode: boolean;
   repetitivePostMessage: string;
-  repetitivePostCount: number; // How many times to post
-  repetitivePostDelay: number; // Delay in seconds between posts
+  repetitivePostCount: number; 
+  repetitivePostDelay: number; 
 
-  // Pre-filled Posting Mode (Advanced/Botting Feature) - Kept for now
+  // Pre-filled Posting Mode (Advanced/Botting Feature) 
   enablePrefilledPostingMode: boolean;
-  prefilledPostMessages: string; // Newline-separated messages
-  prefilledPostTargets: string; // Newline-separated target post numbers (optional)
+  prefilledPostMessages: string; 
+  prefilledPostTargets: string; 
 }
 
 export interface LogEntry {
   id: string;
   timestamp: number;
   message: string;
-  type: 'info' | 'error' | 'success' | 'warning' | 'gemini' | 'dvach' | 'system' | 'auth' | 'bot_activity';
-  data?: unknown; // For structured error data or additional info
+  type: 'info' | 'error' | 'success' | 'warning' | 'gemini' | 'dvach' | 'system' | 'auth' | 'bot_activity' | 'bot_error' | 'bot_setup';
+  data?: unknown; 
 }
 
-export interface ChatMessage { // For GeminiDvachConversation history
-  id: string; // Unique ID for React key
-  role: 'user' | 'model' | 'system'; // 'system' for initial prompt or errors from system
-  parts: Part[]; // Using Gemini's Part type (can include text and inlineData for images)
+export interface ChatMessage { 
+  id: string; 
+  role: 'user' | 'model' | 'system'; 
+  parts: Part[]; 
   timestamp: number;
-  imagePreview?: string; // base64 data URL for displaying sent/received images in chat UI
-  isLoading?: boolean; // True if this is a model message currently being streamed
+  imagePreview?: string; 
+  isLoading?: boolean; 
 }
 
-export type GeminiChat = GeminiChatInstanceType; // Type alias for clarity (Gemini's Chat instance)
+export type GeminiChat = GeminiChatInstanceType; 
 
-export interface GeneratedImage { // For images generated by Gemini
-  base64Data: string; // Base64 encoded image string
-  mimeType: string;   // e.g., 'image/jpeg', 'image/png'
-  prompt?: string;     // The prompt used to generate this image (optional)
+export interface GeneratedImage { 
+  base64Data: string; 
+  mimeType: string;   
+  prompt?: string;     
 }
 
-// For ongoing Gemini-Dvach conversations (Autonomous Bot)
 export interface GeminiDvachConversation {
-  id: string; // Unique conversation ID, e.g., board-threadId-triggerPostNum
+  id: string; 
   board: string;
   threadId: string;
-  triggerPostNum: string; // The Dvach post number that initiated this specific bot interaction branch
-  botSystemPromptUsed: string; // System prompt (including personality modifications) active for this conversation when it started/last replied
-  geminiChatInstance?: GeminiChat; // Stored chat instance for this specific conversation branch (optional if rehydrated)
-  history: ChatMessage[]; // History specific to this conversation branch
-  lastCheckedTimestamp: number; // When this specific conversation branch was last updated by checking Dvach
-  lastBotReplyNum?: string; // The post number of the bot's last reply in this conversation
-  participatingPostNumbers: string[]; // All Dvach post numbers involved in this branch (bot and user)
-  status: 'active' | 'dormant' | 'ended_by_bot' | 'error'; // Status of the conversation
+  triggerPostNum: string; 
+  botSystemPromptUsed: string; 
+  geminiChatInstance?: GeminiChat; 
+  history: ChatMessage[]; 
+  lastCheckedTimestamp: number; 
+  lastBotReplyNum?: string; 
+  participatingPostNumbers: string[]; 
+  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived'; 
+  // Added fields for richer context storage if needed
+  initialContext?: { // To store the extensive context that kicked off the conversation
+    opPostText?: string;
+    opPostImagePreview?: string; // base64 data URL
+    precedingPostsText?: string[];
+    targetPostText: string;
+    targetPostImagePreview?: string; // base64 data URL
+  };
 }
 
 // Types related to Gemini Grounding (for CustomGenerateContentResponse)
@@ -252,10 +249,6 @@ export interface GroundingMetadata {
   groundingChunks?: GroundingChunk[];
 }
 
-// Custom response type to potentially include grounding metadata
-// Candidate type is inferred from GeminiGenerateContentResponseSDK['candidates']
-// which is (GenerateContentCandidate | undefined)[] | undefined
-// So GenerateContentCandidate is the base for Candidate
 type SDKCandidate = NonNullable<GeminiGenerateContentResponseSDK['candidates']>[0];
 
 export interface CustomGenerateContentResponse extends GeminiGenerateContentResponseSDK {
