@@ -17,7 +17,7 @@ export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.3_m
 export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1"; // No change, structure is same
 
 
-export const APP_VERSION = "2.7.2"; 
+export const APP_VERSION = "2.7.3"; 
 export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
 

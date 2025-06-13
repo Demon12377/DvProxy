@@ -114,16 +114,17 @@ export interface SentMessageInfo {
   parent?: string; // Post number this message replied to, if any
   file_info?: { name: string; size: number; hash?: string }; // Info about attached file
   isGeminiPost?: boolean;
-  geminiTriggerPostNum?: string; // If Gemini replied to a specific post
+  geminiTriggerPostNum?: string; // If Gemini replied to a specific post OR if this is the bot's initial seed post in "replies_to_bot" mode.
   geminiGeneratedImage?: boolean; // If Gemini generated an image for this post
   geminiConversationId?: string; // To link to a specific GeminiDvachConversation
+  isBotSeedPost?: boolean; // True if this is the bot's initial post in 'replies_to_bot' mode for a thread
 }
 
 export type ProxyModeForGET =
   | 'vercel_serverless' 
   | 'custom_go_x2u'
   | 'custom_cors_anywhere'
-  | 'custom_codetabs' // New proxy option
+  | 'custom_codetabs' 
   | 'custom_general_prefix'
   | 'custom_general_param'
   | 'none';
@@ -133,7 +134,10 @@ export interface DvachSessionCookies {
   usercode: string | null; 
 }
 
-export type AutonomousBotReplyMode = 'replies_to_bot' | 'random_in_thread';
+export type AutonomousBotReplyMode = 
+  | 'replies_to_bot' 
+  | 'random_in_thread'
+  | 'replies_to_bot_initial_post'; // Internal state for bot making its first post in 'replies_to_bot' mode
 
 export interface AppSettings {
   board: string; // Default board for manual operations tab
@@ -165,7 +169,7 @@ export interface AppSettings {
   autonomousBotTargetThreadId: string; // Specific target thread for the bot
   autonomousBotSystemPrompt: string; 
   botAnalyzesImagesInTriggerPosts: boolean; 
-  autonomousBotReplyMode: AutonomousBotReplyMode;
+  autonomousBotReplyMode: Omit<AutonomousBotReplyMode, 'replies_to_bot_initial_post'>; // User selects 'replies_to_bot' or 'random_in_thread'
   autonomousBotCycleIntervalSeconds: number; 
 
   // Gemini Model Configuration (Mainly for manual replies now, bot uses its own system prompt)
@@ -221,21 +225,23 @@ export interface GeminiDvachConversation {
   id: string; 
   board: string;
   threadId: string;
-  triggerPostNum: string; 
+  triggerPostNum: string; // The post that initiated this specific interaction chain OR the bot's own seed post.
   botSystemPromptUsed: string; 
   geminiChatInstance?: GeminiChat; 
   history: ChatMessage[]; 
   lastCheckedTimestamp: number; 
-  lastBotReplyNum?: string; 
-  participatingPostNumbers: string[]; 
-  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived'; 
+  lastBotReplyNum?: string; // The most recent reply made by the bot in this conversation
+  participatingPostNumbers: string[]; // All post numbers involved in this direct convo (trigger, replies to it, bot's replies)
+  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded'; 
   initialContext?: { 
     opPostText?: string;
     opPostImagePreview?: string; 
     precedingPostsText?: string[];
-    targetPostText: string;
+    targetPostText: string; // Text of the triggerPostNum
     targetPostImagePreview?: string; 
   };
+  isBotSeedConversation?: boolean; // True if this conversation was initiated by the bot's own post in 'replies_to_bot' mode
+  initialBotPostNum?: string; // If isBotSeedConversation, this is the num of the bot's first post in the thread.
 }
 
 // Types related to Gemini Grounding (for CustomGenerateContentResponse)
