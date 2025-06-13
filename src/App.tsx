@@ -1,3 +1,4 @@
+
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleGenAI, Part } from "@google/genai"; 
@@ -657,9 +658,8 @@ useEffect(() => {
         return;
     }
 
-    // Prerequisites for bot to run
     if (!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard || !settings.autonomousBotTargetThreadId) {
-        setAutonomousBotActive(false); // Automatically stop if prerequisites are lost
+        setAutonomousBotActive(false); 
         let reason = "";
         if (!ai) reason = "Gemini AI not initialized";
         else if (!dvachSessionCookies?.passcode_auth) reason = "Not logged into Dvach";
@@ -672,11 +672,19 @@ useEffect(() => {
     const runBotCycle = async () => {
         if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) {
              addAutonomousBotActivityLog("Бот остановлен в начале цикла: отсутствует критическое условие.", 'bot_error');
-             setAutonomousBotActive(false); // Ensure it's marked inactive
+             setAutonomousBotActive(false);
              return;
         }
 
-        const currentBotSettings = { ...settings }; // Capture current settings for this cycle
+        const currentBotSettings = { ...settings }; 
+        
+        if (!currentBotSettings.autonomousBotTargetBoard || !currentBotSettings.autonomousBotTargetThreadId) {
+            addAutonomousBotActivityLog("Целевая доска/тред для бота не установлены в настройках этого цикла. Остановка бота.", 'bot_error');
+            setAutonomousBotStatus("Ошибка: Целевая доска/тред не установлены.");
+            setAutonomousBotActive(false);
+            return;
+        }
+        
         setAutonomousBotStatus(`Активен - Цикл запущен для /${currentBotSettings.autonomousBotTargetBoard}/${currentBotSettings.autonomousBotTargetThreadId}...`);
         addAutonomousBotActivityLog(`Начало цикла бота. Режим: ${currentBotSettings.autonomousBotReplyMode}. Цель: /${currentBotSettings.autonomousBotTargetBoard}/${currentBotSettings.autonomousBotTargetThreadId}`, 'bot_activity');
 
@@ -684,7 +692,7 @@ useEffect(() => {
             const latestPostsInThread = await getThreadData(
                 currentBotSettings.autonomousBotTargetBoard,
                 currentBotSettings.autonomousBotTargetThreadId,
-                currentBotSettings.proxyModeForGET, // Use main proxy for thread data
+                currentBotSettings.proxyModeForGET,
                 currentBotSettings.customProxyUrlForGET,
                 currentBotSettings.userAgent
             ).catch(e => {
@@ -701,7 +709,6 @@ useEffect(() => {
 
             const opPost = actualPosts.find(p => p.num === currentBotSettings.autonomousBotTargetThreadId || p.op === 1);
 
-            // Manage OP Media Cache
             if (opPost && currentBotSettings.geminiAnalyzeOpMedia &&
                 (!currentBotOpMediaCache || currentBotOpMediaCache.threadId !== currentBotSettings.autonomousBotTargetThreadId || currentBotOpMediaCache.opPostNum !== opPost.num)) {
                 addAutonomousBotActivityLog(`Обновление кэша медиа ОП-поста (>>${opPost.num})...`, 'bot_setup');
@@ -735,7 +742,6 @@ useEffect(() => {
             }
 
             let botMadeAPostThisCycle = false;
-             // const newConversationsMap = new Map(geminiDvachConversations); // No longer needed here as we update global state directly
 
             if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
                 setAutonomousBotStatus("Режим 'random_in_thread': Поиск цели...");
@@ -744,9 +750,9 @@ useEffect(() => {
                     .map(sm => sm.num);
 
                 const eligiblePosts = actualPosts.filter(p => 
-                    !botPostNumbers.includes(p.num) && // Not bot's own post
-                    !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) && // Not a bump post
-                    p.num !== currentBotSettings.autonomousBotTargetThreadId // Not replying to OP directly in random mode (can be configured)
+                    !botPostNumbers.includes(p.num) && 
+                    !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) && 
+                    p.num !== currentBotSettings.autonomousBotTargetThreadId 
                 );
 
                 if (eligiblePosts.length === 0) {
@@ -784,7 +790,7 @@ useEffect(() => {
                     }
                     userMessageParts.push({ text: promptForBot + `Сгенерируй свой ответ.` });
                     
-                    const response = await ai.models.generateContent({
+                    const geminiApiResponse = await ai.models.generateContent({
                         model: GEMINI_TEXT_MODEL,
                         contents: [{role: 'user', parts: userMessageParts}],
                         config: {
@@ -795,31 +801,30 @@ useEffect(() => {
                         }
                     });
 
-                    const parsedReply = parseGeminiJsonResponse<BotReplySchema>(response.text);
-                    if (parsedReply && parsedReply.replyText) {
-                        let botReplyText = parsedReply.replyText.trim();
-                         if (!botReplyText.startsWith(`>>${targetPost.num}`)) { // Ensure target is quoted
-                            botReplyText = `>>${targetPost.num}\n${botReplyText}`;
+                    const textToParse = geminiApiResponse.text;
+                    if (typeof textToParse === 'string') {
+                        const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
+                        if (parsedReply && parsedReply.replyText) {
+                            let botReplyText = parsedReply.replyText.trim();
+                            if (!botReplyText.startsWith(`>>${targetPost.num}`)) {
+                                botReplyText = `>>${targetPost.num}\n${botReplyText}`;
+                            }
+                            addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${botReplyText.substring(0, 70)}...`);
+                            const newPostNum = await commonPostToDvach(botReplyText, null, false, currentBotSettings.autonomousBotTargetBoard, currentBotSettings.autonomousBotTargetThreadId, targetPost.num);
+                            botMadeAPostThisCycle = true;
+                            setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: botReplyText, board: currentBotSettings.autonomousBotTargetBoard, thread: currentBotSettings.autonomousBotTargetThreadId, parent: targetPost.num, isGeminiPost: true }, ...prev]);
+                            setAutonomousBotStatus(`Ответил как >>${newPostNum} на >>${targetPost.num}`);
+                        } else {
+                            addAutonomousBotActivityLog(`Ошибка парсинга JSON ответа Gemini или отсутствует replyText для >>${targetPost.num}. Ответ: ${textToParse.substring(0,200)}`, 'bot_warning');
                         }
-                        addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${botReplyText.substring(0, 70)}...`);
-                        const newPostNum = await commonPostToDvach(botReplyText, null, false, currentBotSettings.autonomousBotTargetBoard, currentBotSettings.autonomousBotTargetThreadId, targetPost.num);
-                        botMadeAPostThisCycle = true;
-                        setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: botReplyText, board: currentBotSettings.autonomousBotTargetBoard, thread: currentBotSettings.autonomousBotTargetThreadId, parent: targetPost.num, isGeminiPost: true }, ...prev]);
-                        setAutonomousBotStatus(`Ответил как >>${newPostNum} на >>${targetPost.num}`);
                     } else {
-                        addAutonomousBotActivityLog(`Ошибка парсинга JSON ответа Gemini или отсутствует replyText для >>${targetPost.num}. Ответ: ${response.text.substring(0,200)}`, 'bot_warning');
+                         addAutonomousBotActivityLog(`Ответ Gemini не содержит текстовой части для >>${targetPost.num}. Ответ: ${JSON.stringify(geminiApiResponse)}`, 'bot_warning');
                     }
                 }
             } else if (currentBotSettings.autonomousBotReplyMode === 'replies_to_bot') {
-                // ... (Logic for 'replies_to_bot' - should also be updated for JSON output)
-                // This mode is more complex and involves managing conversation history.
-                // For brevity, this detailed implementation is omitted here but would follow similar JSON patterns.
                  addAutonomousBotActivityLog("Режим 'replies_to_bot' еще не полностью переведен на JSON ответы в этом обновлении.", 'bot_warning');
             }
-
-            if (botMadeAPostThisCycle) {
-                 // setGeminiDvachConversations(new Map(newConversationsMap)); // Update if conversations were managed
-            }
+            
             setAutonomousBotStatus(`Ожидание (${currentBotSettings.autonomousBotCycleIntervalSeconds}с) /${currentBotSettings.autonomousBotTargetBoard}/${currentBotSettings.autonomousBotTargetThreadId}`);
             addAutonomousBotActivityLog("Цикл бота завершен.", 'bot_activity');
 
@@ -833,13 +838,12 @@ useEffect(() => {
     addLog(`Автономный бот запущен. Интервал: ${settings.autonomousBotCycleIntervalSeconds}с. Режим: ${settings.autonomousBotReplyMode}. Цель: /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}`, 'bot_setup');
     setAutonomousBotStatus("Активен - Подготовка к первому циклу...");
     
-    // Run first cycle slightly delayed to allow UI to update
     const initialTimeoutId = setTimeout(() => {
-        if (autonomousBotActive) runBotCycle(); // Check if still active before running
+        if (autonomousBotActive) runBotCycle();
     }, 3000);
 
     autonomousBotIntervalRef.current = setInterval(() => {
-      if (autonomousBotActive) runBotCycle(); // Check if still active
+      if (autonomousBotActive) runBotCycle();
     }, settings.autonomousBotCycleIntervalSeconds * 1000) as unknown as number;
 
     return () => {
@@ -850,7 +854,7 @@ useEffect(() => {
             addLog("Интервал автономного бота остановлен.", "bot_setup");
         }
     };
-}, [autonomousBotActive, ai, dvachSessionCookies, addLog, addAutonomousBotActivityLog, settings]); // Re-run if critical dependencies change. `settings` is broad, specific parts are used inside.
+}, [autonomousBotActive, ai, dvachSessionCookies, addLog, addAutonomousBotActivityLog, settings]);
   
   const toggleTheme = () => {
     const newTheme = settings.theme === 'light' ? 'dark' : settings.theme === 'dark' ? 'system' : 'light';
@@ -957,7 +961,6 @@ useEffect(() => {
   )};
 
   const renderDvachBotPanel = () => ( 
-    // ... (DvachBotPanel unchanged) ...
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400 border-b pb-2 border-gray-300 dark:border-gray-700">Dvach Manual Operations</h2>
       
@@ -1062,7 +1065,6 @@ useEffect(() => {
   );
 
   const renderAutonomousBotControlPanel = () => ( 
-    // ... (AutonomousBotControlPanel - UI elements unchanged, logic for bot start/stop and display updated by useEffect) ...
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <div className="flex justify-between items-center border-b pb-2 border-gray-300 dark:border-gray-700">
         <h2 className="text-2xl font-semibold text-purple-600 dark:text-purple-400">Autonomous Gemini Bot Control</h2>
@@ -1179,7 +1181,6 @@ useEffect(() => {
   );
 
   const renderSettingsPanel = () => {
-    // ... (SettingsPanel unchanged, includes new bot mode in dropdown) ...
     const isCustomUrlForGetEditable = settings.proxyModeForGET === 'custom_general_prefix' || settings.proxyModeForGET === 'custom_general_param';
     const isCustomUrlForImagesEditable = settings.proxyModeForImagesGET === 'custom_general_prefix' || settings.proxyModeForImagesGET === 'custom_general_param';
 
@@ -1348,7 +1349,6 @@ useEffect(() => {
 
 
   const renderLogsPanel = () => (
-    // ... (LogsPanel unchanged) ...
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700 flex-grow">Event Logs</h2>
