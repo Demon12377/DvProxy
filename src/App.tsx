@@ -28,7 +28,7 @@ import {
 
 // Ensure VITE_GEMINI_API_KEY is read correctly from import.meta.env
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-// Minor comment to try and force cache refresh on Vercel - 2024-07-29_v2
+// Minor comment to try and force cache refresh on Vercel - 2024-07-29_v3 (another attempt)
 
 interface BotReplySchema {
   replyText: string; 
@@ -89,7 +89,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 };
 
 
-const formatLogDataForDisplay = (data: unknown): string => {
+const formatLogDataForDisplay = (data: unknown): string => { // Explicit return type
   if (typeof data === 'string') return data;
   if (typeof data === 'number' || typeof data === 'boolean' || data === null || data === undefined) {
     return String(data);
