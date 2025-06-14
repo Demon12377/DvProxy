@@ -39,22 +39,20 @@ export default async function handler(req, res) {
     let purchasedPasscode;
     const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS;
 
+    // Ensure body is parsed as JSON
     if (req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
         purchasedPasscode = req.body.purchased_passcode;
     } else {
-        console.warn(`${timestamp} [api/dvach-login] Content-Type not application/json. Attempting to read body as text for passcode.`);
+        // If not JSON, try to parse it as such, assuming it might be sent incorrectly
+        let body = '';
+        for await (const chunk of req) { body += chunk; }
         try {
-          let body = '';
-          for await (const chunk of req) { body += chunk; }
-          const params = new URLSearchParams(body); 
-          purchasedPasscode = params.get('purchased_passcode');
-           if(!purchasedPasscode && body.startsWith("{")) { 
-              purchasedPasscode = JSON.parse(body).purchased_passcode;
-          }
+            const parsedBody = JSON.parse(body);
+            purchasedPasscode = parsedBody.purchased_passcode;
         } catch (parseError) {
-           console.error(`${timestamp} [api/dvach-login] Error parsing non-JSON request body:`, parseError);
+           console.error(`${timestamp} [api/dvach-login] Error parsing request body as JSON:`, parseError, "Body was:", body.substring(0,200));
            res.setHeader('Content-Type', 'application/json');
-           return res.status(400).json({ result: 0, error: {code: -1009, message: "Invalid request body format. Please send JSON with 'purchased_passcode' or ensure correct form data."}});
+           return res.status(400).json({ result: 0, error: {code: -1009, message: "Invalid request body format. Please send JSON with 'purchased_passcode'."}});
         }
     }
 
@@ -67,9 +65,9 @@ export default async function handler(req, res) {
     console.log(`${timestamp} [api/dvach-login] Attempting Dvach login with purchased passcode... UA: ${clientUserAgent}`);
     const loginFormData = new FormDataNode(); 
     loginFormData.append('passcode', purchasedPasscode);
-    // 'json=1' should be a query parameter, not in FormData for this endpoint.
-
-    const loginUrl = `${DVACH_BASE_URL}/user/passlogin?json=1`; // Correct: json=1 as query param
+    
+    // According to api.yml.md for /user/passlogin, json=1 should be a query parameter.
+    const loginUrl = `${DVACH_BASE_URL}/user/passlogin?json=1`; 
     let loginResponse;
 
     try {
@@ -81,6 +79,9 @@ export default async function handler(req, res) {
           'User-Agent': clientUserAgent,
           'Accept': 'application/json', 
         },
+        // IMPORTANT: Do not follow redirects automatically, as we need to inspect cookies from the 303 if it occurs.
+        // However, with json=1, a 303 might not happen and a direct JSON response with cookies is expected by some interpretations.
+        // Let's assume json=1 aims for a direct JSON response. If it still redirects, then cookie extraction is vital.
       });
     } catch (fetchLoginError) {
       console.error(`${timestamp} [api/dvach-login] Network error calling Dvach /user/passlogin:`, fetchLoginError);
@@ -91,70 +92,58 @@ export default async function handler(req, res) {
     const loginResponseText = await loginResponse.text();
     console.log(`${timestamp} [api/dvach-login] Dvach login response status: ${loginResponse.status}, text (first 300): ${loginResponseText.substring(0,300)}`);
     
-    if (loginResponse.status === 303) {
-      const passcodeAuthCookieForRedirect = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'passcode_auth');
-      const userCodeCookieForRedirect = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'usercode');
-      if (passcodeAuthCookieForRedirect) {
-        console.warn(`${timestamp} [api/dvach-login] Dvach login resulted in 303 redirect (likely success), cookies extracted.`);
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(200).json({
-            result: 1, message: "Dvach login likely successful (redirected), cookies extracted.",
-            passcode_auth_cookie_value: passcodeAuthCookieForRedirect,
-            user_code_cookie_value: userCodeCookieForRedirect,
-        });
-      } else {
-        console.error(`${timestamp} [api/dvach-login] Dvach login resulted in 303 redirect, but passcode_auth cookie was NOT found. This indicates a problem.`);
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(500).json({ 
-            result: 0, 
-            error: { code: -1008, message: "Dvach login redirected (implying success) but did not provide the necessary session cookie. Response: " + loginResponseText.substring(0,100) }
-        });
-      }
-    }
+    // Extract cookies regardless of status code, as they might be set even on "already logged in" or redirect scenarios.
+    const passcodeAuthCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'passcode_auth');
+    const userCodeCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'usercode');
 
     let loginJson;
     try {
       loginJson = JSON.parse(loginResponseText);
     } catch (e) {
       console.error(`${timestamp} [api/dvach-login] Dvach login response was not JSON: ${loginResponseText.substring(0,200)}. Status: ${loginResponse.status}`);
-      res.setHeader('Content-Type', 'application/json');
-      if (!loginResponse.ok) { 
-          return res.status(loginResponse.status).json({ result: 0, error: { code: loginResponse.status, message: `Dvach login request failed: ${loginResponseText.substring(0,100)}` } });
+      // If cookies were set even with non-JSON response (e.g., unexpected HTML on error, but cookies still present),
+      // consider it a partial success if passcode_auth is found.
+      if (passcodeAuthCookie) {
+          console.warn(`${timestamp} [api/dvach-login] Dvach response not JSON, but passcode_auth cookie found. Proceeding with cookie.`);
+          res.setHeader('Content-Type', 'application/json');
+          return res.status(200).json({
+              result: 1, // Indicate success due to cookie
+              message: "Dvach response was not JSON, but session cookie found. Assuming login state.",
+              passcode_auth_cookie_value: passcodeAuthCookie,
+              user_code_cookie_value: userCodeCookie,
+              dvach_raw_response_preview: loginResponseText.substring(0,200)
+          });
       }
-      // If Dvach response is 200 OK but not JSON, it's an issue because json=1 was specified.
-      return res.status(500).json({ result: 0, error: { code: -1006, message: `Dvach login response was OK but not valid JSON (json=1 was used). Response: ${loginResponseText.substring(0,100)}` } });
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(loginResponse.status === 200 ? 500 : loginResponse.status) // If 200 but not JSON, it's a server error for json=1
+                 .json({ result: 0, error: { code: -1006, message: `Dvach login response was not valid JSON (Status: ${loginResponse.status}). Response: ${loginResponseText.substring(0,100)}` } });
     }
 
+    // Check for structured error from Dvach's JSON
     if (loginJson.error && typeof loginJson.error.code === 'number' && typeof loginJson.error.message === 'string') {
         console.error(`${timestamp} [api/dvach-login] Dvach login failed with structured error. Code: ${loginJson.error.code}, Message: ${loginJson.error.message}`);
         res.setHeader('Content-Type', 'application/json');
-        return res.status(loginResponse.status).json({ // Use Dvach's status if available and indicative of error
+        return res.status(loginResponse.status).json({ // Use Dvach's status if available
             result: 0,
             error: { code: loginJson.error.code, message: `Dvach login error: ${loginJson.error.message}` }
         });
     }
    
-    if (!loginResponse.ok) { 
-       const loginErrorMsg = loginJson.reason || loginJson.Error || loginResponseText.substring(0,100) || `Login failed with status ${loginResponse.status}`;
-       console.error(`${timestamp} [api/dvach-login] Dvach login failed. Status: ${loginResponse.status}. Message: ${loginErrorMsg}`);
-       res.setHeader('Content-Type', 'application/json');
-       return res.status(loginResponse.status).json({ result: 0, error: { code: -1003, message: `Dvach login failed: ${loginErrorMsg}` } });
-    }
-    
-    if (loginJson.result !== 1 && loginJson.result !== 2) { 
+    // If Dvach response indicates failure by result code (e.g. result: 0 for "passcode not found")
+    if (loginJson.result !== 1 && loginJson.result !== 2) { // result: 2 means passcode already active
       const errMsg = loginJson.reason || loginJson.Error || "Passcode login did not return success or active status (result != 1 or 2).";
       console.error(`${timestamp} [api/dvach-login] Dvach login response indicates failure: ${errMsg}. Full JSON:`, loginJson);
       res.setHeader('Content-Type', 'application/json');
-      return res.status(401).json({ result: 0, error: { code: -1004, message: `Dvach login error: ${errMsg}` } });
+      return res.status(401).json({ result: 0, error: { code: loginJson.error?.code || -1004, message: `Dvach login error: ${errMsg}` } });
     }
 
-    const passcodeAuthCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'passcode_auth');
-    const userCodeCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'usercode');
-
+    // Success (result: 1 or 2)
     if (!passcodeAuthCookie) {
-      console.error(`${timestamp} [api/dvach-login] CRITICAL: Dvach login response was success/active (result: ${loginJson.result}), but no passcode_auth cookie was set.`);
+      console.error(`${timestamp} [api/dvach-login] CRITICAL: Dvach login response was success/active (result: ${loginJson.result}), but no passcode_auth cookie was set. This usually means the passcode was invalid or another issue occurred.`);
       res.setHeader('Content-Type', 'application/json');
-      return res.status(500).json({ result: 0, error: { code: -1005, message: "Dvach login succeeded (or was already active) but no passcode_auth cookie was set in response." } });
+      // Return Dvach's error message if available and result was 0, otherwise a generic one.
+      const dvachErrorReason = loginJson.reason || loginJson.Error || "Dvach login reported success/active but failed to provide session cookie.";
+      return res.status(401).json({ result: 0, error: { code: loginJson.error?.code || -1005, message: dvachErrorReason } });
     }
     
     console.log(`${timestamp} [api/dvach-login] Dvach login successful. Cookies obtained. passcode_auth: OK, usercode: ${userCodeCookie || 'MISSING'}`);
@@ -165,29 +154,16 @@ export default async function handler(req, res) {
       message: loginJson.message || "Dvach login successful.",
       passcode_auth_cookie_value: passcodeAuthCookie,
       user_code_cookie_value: userCodeCookie, 
+      passcode_details_from_dvach: loginJson.passcode // Forward Dvach's passcode object if present
     });
 
   } catch (unhandledError) {
     const errorTimestamp = new Date().toISOString();
     console.error(`${errorTimestamp} [api/dvach-login] CRITICAL UNHANDLED ERROR in handler:`, unhandledError);
-    try {
-      if (!res.headersSent) {
-        res.setHeader('Content-Type', 'application/json');
-      }
-      
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
       const errorMessage = unhandledError instanceof Error ? unhandledError.message : 'Unknown unhandled error';
-      const safeErrorMessage = String(errorMessage).substring(0, 500); 
-
-      if (!res.headersSent) {
-        return res.status(500).json({
-          result: 0,
-          error: { code: -5000, message: `An unexpected server error occurred in /api/dvach-login. Details: ${safeErrorMessage}` }
-        });
-      } else {
-        console.error(`${errorTimestamp} [api/dvach-login] Headers already sent. Could not send JSON 500 for unhandled error.`);
-      }
-    } catch (finalCatchError) {
-      console.error(`${errorTimestamp} [api/dvach-login] FAILED TO SEND JSON 500 RESPONSE in final catch:`, finalCatchError);
+      return res.status(500).json({ result: 0, error: { code: -5000, message: `Unexpected server error: ${errorMessage.substring(0,300)}` } });
     }
   }
 }

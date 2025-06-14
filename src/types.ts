@@ -1,6 +1,6 @@
 
 /// <reference types="vite/client" />
-import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK } from "@google/genai";
+import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason } from "@google/genai";
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -90,10 +90,14 @@ export interface DvachPostApiResponse {
   thread?: string; // New thread number (for new threads), ensure string
   target?: string; // Alternative for new thread number, ensure string
   status?: string; // Can be "OK" (old API for /user/passlogout)
-  // For login success specifically:
+  // For login success specifically (added by serverless function):
   message?: string; // e.g., "Dvach login successful."
   passcode_auth_cookie_value?: string;
   user_code_cookie_value?: string;
+  passcode?: { // from Dvach's /user/passlogin?json=1
+    type?: string;
+    expires?: number;
+  };
   [key: string]: any; // Allow other potential fields
 }
 
@@ -138,11 +142,12 @@ export interface DvachSessionCookies {
 export type AutonomousBotReplyMode = 
   | 'replies_to_bot' 
   | 'random_in_thread';
-  // | 'replies_to_bot_initial_post'; // Removed as it was internal state
 
 export interface AppSettings {
+  // Global Dvach Settings (used by Manual Ops tab inputs primarily)
   board: string; 
   threadId: string; 
+  
   purchasedPasscode: string; 
 
   geminiApiKeySource: 'env' | 'user';
@@ -150,33 +155,34 @@ export interface AppSettings {
 
   theme: 'light' | 'dark' | 'system';
 
-  proxyModeForGET: ProxyModeForGET; // For thread data, etc.
+  // Proxy settings (primarily client-side for GETs not covered by serverless)
+  proxyModeForGET: ProxyModeForGET; // For thread data, if not 'vercel_serverless'
   customProxyUrlForGET: string;    
   
-  proxyModeForImagesGET: ProxyModeForGET; // Specifically for fetching images/media
+  proxyModeForImagesGET: ProxyModeForGET; // Specifically for fetching images/media by client
   customProxyUrlForImagesGET: string;   
   
   userAgent: string; 
 
-  // Manual Gemini Reply settings
-  geminiAnalyzeOpMedia: boolean; // For manual reply: analyze OP post media
-  geminiAnalyzeAnonMedia: boolean; // For manual reply: analyze non-OP post media
+  // Manual Gemini Reply settings (for Manual Ops tab)
+  geminiAnalyzeOpMedia: boolean; 
+  geminiAnalyzeAnonMedia: boolean; 
   
-  // Global Gemini interaction settings
-  geminiReplyWithGeneratedImage: boolean; // Applies to both manual and bot replies
-  maxImagesToAnalyzePerPost: number; // Applies to both manual and bot
+  // Global Gemini interaction settings (applies to both Manual and Bot where relevant)
+  geminiReplyWithGeneratedImage: boolean; 
+  maxImagesToAnalyzePerPost: number; 
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string; 
   autonomousBotTargetThreadId: string; 
   autonomousBotSystemPrompt: string; 
-  botAnalyzesImagesInTriggerPosts: boolean; // Bot: analyze media in the post it's replying to
+  botAnalyzesImagesInTriggerPosts: boolean; 
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number; 
-  autonomousBotAllowReplyToSelf: boolean; // New setting
+  autonomousBotAllowReplyToSelf: boolean; 
 
-  // Gemini Model Configuration (Mainly for manual replies, bot might use simplified settings or system prompt dictates)
+  // Gemini Model Configuration (mainly for manual replies; bot might use simplified or system prompt dictates style)
   geminiSystemInstruction: string; // For manual replies primarily
   geminiTemperature: number;
   geminiTopP: number;
@@ -226,27 +232,28 @@ export interface GeneratedImage {
 }
 
 export interface GeminiDvachConversation {
-  id: string; 
+  id: string; // e.g., "board_threadId"
   board: string;
   threadId: string;
-  triggerPostNum: string; 
-  botSystemPromptUsed: string; 
-  geminiChatInstance?: GeminiChat; // Store initialized chat for conversational mode
-  history: ChatMessage[]; 
-  lastCheckedTimestamp: number; 
-  lastBotReplyNum?: string; 
-  participatingPostNumbers: string[]; 
+  triggerPostNum: string; // The post num that initiated this specific interaction or seed. For bot context, could be OP.
+  botSystemPromptUsed: string; // The system prompt active when this conversation context was primarily built or last acted upon by bot.
+  geminiChatInstance?: GeminiChat; // Stored initialized chat for conversational mode (currently not fully utilized by bot, history is primary)
+  history: ChatMessage[]; // Full history including initial system prompt, user posts (formatted), and bot model replies.
+  lastCheckedTimestamp: number; // When this thread was last processed by the bot.
+  lastBotReplyNum?: string; // The Dvach post number of the bot's last reply in this context.
+  participatingPostNumbers: string[]; // Set of Dvach post numbers that are part of this conversation (user posts, bot replies).
   status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded' | 'context_built'; 
-  initialContext?: { 
+  initialContext?: { // Context built when conversation was initiated or reset for the thread
+    opPostNum?: string;
     opPostText?: string;
-    opPostImagePreviews?: string[]; // Multiple previews if OP has multiple images
-    opPostMediaParts?: Part[]; // Cached media parts for OP
-    precedingPostsText?: string[]; // Text of posts right before the trigger
+    opPostImagePreviews?: string[]; 
+    opPostMediaParts?: Part[]; // Cached media parts from OP post
+    precedingPostsText?: string[]; // Text of posts right before the trigger (if applicable)
     targetPostText?: string; // Text of the triggerPostNum itself (if not OP)
-    targetPostImagePreviews?: string[]; // If target post has images
+    targetPostImagePreviews?: string[]; 
   };
-  isBotSeedConversation?: boolean; 
-  initialBotPostNum?: string; 
+  isBotSeedConversation?: boolean; // True if this conversation was seeded by the bot itself (e.g. initial post in a thread)
+  initialBotPostNum?: string; // If isBotSeedConversation, the Dvach post num of the bot's seed post.
 }
 
 // Types related to Gemini Grounding (for CustomGenerateContentResponse)
@@ -263,18 +270,26 @@ export interface GroundingChunk {
 
 export interface GroundingMetadata {
   webSearchQueries?: string[];
-  groundingChunks?: GroundingChunk[];
+  groundingAttribution?: { // Corrected from groundingChunks
+     sourceId: string;
+     content: {
+       text: string;
+       title?: string;
+       uri?: string;
+     }
+  }[];
 }
 
 type SDKCandidate = NonNullable<GeminiGenerateContentResponseSDK['candidates']>[0];
 
 export interface CustomGenerateContentResponse extends GeminiGenerateContentResponseSDK {
-  candidates?: (SDKCandidate & { groundingMetadata?: GroundingMetadata })[];
+  candidates?: (SDKCandidate & { groundingMetadata?: GroundingMetadata; finishReason?: FinishReason | string })[];
 }
 
+// Cache for OP media to avoid refetching/reprocessing constantly for the bot
 export interface BotOpMediaCache {
-  threadId: string;
-  opPostNum: string;
-  mediaParts: Part[];
-  mediaContextText: string; // A textual description of the media for prompts
+  threadId: string; // Full thread ID this cache belongs to
+  opPostNum: string; // OP post number
+  mediaParts: Part[]; // Processed Gemini Parts for OP media
+  mediaContextText: string; // A textual description/summary of the OP media for prompts
 }

@@ -8,7 +8,7 @@ import {
   DvachFile, GeminiDvachConversation, ChatMessage, 
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache
 } from './types'; 
-import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError } from './services/dvachService';
+import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import { 
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
@@ -83,48 +83,6 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   prefilledPostMessages: "Message 1\nMessage 2 >>TARGET_POST_NUM",
   prefilledPostTargets: "", 
 };
-
-
-function buildProxiedGetUrlForApp(
-  targetUrl: string, 
-  proxyMode: ProxyModeForGET, 
-  customProxyUrl?: string   
-): string {
-  if (!targetUrl.startsWith('http')) { 
-    if (!targetUrl.startsWith('/api/')) { 
-        console.warn(`[App/buildProxiedGetUrlForApp] targetUrl '${targetUrl}' is not a full HTTP/S URL. Returning as is.`);
-    }
-    return targetUrl; 
-  }
-  
-  switch (proxyMode) {
-    case 'custom_go_x2u':
-      return `${customProxyUrl || PROXY_URL_GO_X2U_BASE}${encodeURIComponent(targetUrl)}`;
-    case 'custom_cors_anywhere':
-      const corsBase = (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY).endsWith('/') 
-          ? (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY) 
-          : `${(customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY)}/`;
-      return `${corsBase}${targetUrl}`;
-    case 'custom_codetabs':
-      return `${customProxyUrl || PROXY_URL_CODETABS_BASE}${encodeURIComponent(targetUrl.replace(/^https?:\/\//, ''))}`;
-    case 'custom_general_prefix':
-      if (!customProxyUrl) return targetUrl;
-      return customProxyUrl.endsWith('/') ? `${customProxyUrl}${targetUrl}` : `${customProxyUrl}/${targetUrl}`;
-      
-    case 'custom_general_param':
-      if (!customProxyUrl || !customProxyUrl.includes('=')) {
-        console.warn(`[App/buildProxiedGetUrlForApp] Custom general param proxy mode, but URL '${customProxyUrl}' is invalid. Using direct.`);
-        return targetUrl;
-      }
-      return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
-    case 'vercel_serverless': 
-         console.warn(`[App/buildProxiedGetUrlForApp] 'vercel_serverless' proxy mode used for external URL '${targetUrl}'. This is typically for /api/get-thread. Using direct fetch for this URL.`);
-         return targetUrl;
-    case 'none':
-    default:
-      return targetUrl;
-  }
-}
 
 
 const formatLogDataForDisplay = (data: unknown): string => {
@@ -348,7 +306,7 @@ const App: React.FC = () => {
     const keyToUse = settings.geminiApiKeySource === 'env' ? processEnvApiKey : settings.userGeminiApiKey;
     if (keyToUse) {
       try {
-        if (!ai || (ai as any)._apiKey !== keyToUse) {
+        if (!ai || (ai as any)._apiKey !== keyToUse) { // Re-initialize if key changed or not set
             const genAI = new GoogleGenAI({ apiKey: keyToUse });
             setAi(genAI);
             addLog('Gemini API initialized successfully.', 'success');
@@ -472,6 +430,7 @@ const App: React.FC = () => {
       throw new Error(errorMsg);
     }
     
+    // Dvach API expects "0" for new thread in the 'thread' field.
     const effectiveThreadIdForDvach = (!threadIdForDvachApi || threadIdForDvachApi === "0") ? "0" : threadIdForDvachApi;
     
     const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
@@ -502,6 +461,8 @@ const App: React.FC = () => {
         timestamp: Date.now(),
         comment: comment,
         board: boardToPost,
+        // If it was a new thread (effectiveThreadIdForDvach === "0"), the newPostNum IS the thread ID.
+        // Otherwise, it's a reply within the existing effectiveThreadIdForDvach.
         thread: effectiveThreadIdForDvach === "0" ? newPostNum : effectiveThreadIdForDvach, 
         parent: finalReplyToPostNum, 
         file_info: file ? { name: file.name, size: file.size } : undefined,
@@ -513,16 +474,17 @@ const App: React.FC = () => {
       const dvachApiError = extractDvachApiError(error);
       let errorMsg = error.message;
 
+      // Check for specific error codes related to session/ban from makaba.md
       if (dvachApiError && (dvachApiError.code === -4 || dvachApiError.code === -6 || dvachApiError.code === -21 || dvachApiError.message.toLowerCase().includes("постинг запрещён") || dvachApiError.message.toLowerCase().includes("доступ запрещен"))) {
         errorMsg = `Dvach session likely expired or invalid (Error: ${dvachApiError.message}). Please log in again.`;
         addLog(errorMsg, 'auth', dvachApiError);
-        setDvachSessionCookies(null); 
+        setDvachSessionCookies(null); // Clear invalid session
       } else {
         addLog(`Failed to post: ${errorMsg}`, 'error', error);
       }
       setFetchError(errorMsg); 
       if (activeTab === 'dvach') addPostActivity(`Post Failed: ${errorMsg}`);
-      throw new Error(errorMsg); 
+      throw new Error(errorMsg); // Re-throw to be caught by calling function if needed
     } finally {
       setIsPosting(false);
     }
@@ -531,9 +493,13 @@ const App: React.FC = () => {
   const handleSimplePost = async () => { 
     try {
       const board = currentBoard.trim();
-      const threadContext = currentThreadId.trim(); 
+      const threadContext = currentThreadId.trim(); // This is the thread OP post number if replying in existing thread
+      // For Dvach API: 'thread' field is 0 for new thread, or thread_op_num for existing.
       const threadTargetForDvach = threadContext && threadContext !== "0" ? threadContext : "0";
       
+      // For simple post, 'parent' is not usually set unless it's a direct reply UI is added.
+      // Assuming simple post is either new thread or generic post to existing thread, not specific reply.
+      // If threadTargetForDvach is an existing thread, posts go into it without specific parent.
       await commonPostToDvach(postText, postFile, postUseSage, board, threadTargetForDvach, undefined);
       setPostText('');
       setPostFile(null);
@@ -548,7 +514,7 @@ const App: React.FC = () => {
         return; 
     }
     const boardForReply = currentBoard.trim();
-    const threadForReply = currentThreadId.trim();
+    const threadForReply = currentThreadId.trim(); // This is the OP post num of the thread
     if (!boardForReply || !threadForReply) { addLog('Current board or thread ID not set for manual reply.', 'error'); return; }
 
     setGeminiLoading(true);
@@ -583,7 +549,7 @@ const App: React.FC = () => {
                                 (settings.geminiAnalyzeAnonMedia && !isOpPost);
         if (analysisEnabled) {
             imageFilesToAnalyze = targetPost.files
-                .filter(file => (file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9)) 
+                .filter(file => (file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9)) // Common image types
                 .slice(0, settings.maxImagesToAnalyzePerPost);
         }
     }
@@ -594,7 +560,7 @@ const App: React.FC = () => {
             try {
                 const imageBaseUrl = DVACH_DOMAINS[0]; 
                 const imageUrl = `${imageBaseUrl}${dvachImageFile.path}`; 
-                const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
+                const proxiedImageUrl = buildProxiedGetUrl(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
                 addLog(`Fetching image ${dvachImageFile.name} for Gemini analysis (manual reply) using proxy mode '${settings.proxyModeForImagesGET}' from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
 
                 const imageResponse = await fetch(proxiedImageUrl);
@@ -605,12 +571,13 @@ const App: React.FC = () => {
                 const imageBlob = await imageResponse.blob();
                 
                 let mimeType = imageBlob.type;
+                // Infer MIME type if blob.type is missing or generic, based on DvachFile.type
                 if (!mimeType || !mimeType.startsWith('image/')) { 
                     mimeType = dvachImageFile.type === 1 ? 'image/jpeg' : 
                                dvachImageFile.type === 2 ? 'image/png' : 
                                dvachImageFile.type === 4 ? 'image/gif' : 
                                dvachImageFile.type === 9 ? 'image/webp' : 
-                               'image/jpeg'; 
+                               'image/jpeg'; // Default fallback
                 }
 
                 const base64data = await new Promise<string>((resolveP, rejectP) => {
@@ -638,7 +605,7 @@ const App: React.FC = () => {
           systemInstruction: systemInstructionForReply,
           temperature: settings.geminiTemperature, topP: settings.geminiTopP, 
           topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
-          responseMimeType: settings.geminiResponseMimeType,
+          responseMimeType: settings.geminiResponseMimeType, // Note: if 'application/json', prompt must ask for JSON
           thinkingConfig: settings.useThinkingBudget ? { thinkingBudget: settings.geminiThinkingBudget } : undefined
         }
       });
@@ -670,6 +637,7 @@ const App: React.FC = () => {
             }
         }
       }
+      // For Dvach API: 'thread' is the OP post number, 'parent' is the post being replied to.
       const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, boardForReply, threadForReply, targetPost.num);
       
       setSentMessages(prev => prev.map(msg => 
@@ -679,6 +647,7 @@ const App: React.FC = () => {
       addLog(`Manual Gemini reply posted as >>${newPostNumByGemini} to /${boardForReply}/${threadForReply}.`, 'success');
 
     } catch (error) {
+      // Avoid double-logging if commonPostToDvach already logged it.
       if (! (error as Error).message.toLowerCase().includes("post failed") && ! (error as Error).message.toLowerCase().includes("dvach login")) { 
          addLog(`Error during manual Gemini reply generation for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
       }
@@ -687,6 +656,7 @@ const App: React.FC = () => {
     }
   };
 
+// Autonomous Bot Core Logic
 useEffect(() => {
     if (!autonomousBotActive) {
         if (autonomousBotIntervalRef.current) {
@@ -694,7 +664,7 @@ useEffect(() => {
             autonomousBotIntervalRef.current = null;
         }
         setAutonomousBotStatus("Inactive - Bot Stopped");
-        setCurrentBotOpMediaCache(null); 
+        setCurrentBotOpMediaCache(null); // Clear OP media cache when bot stops
         return;
     }
 
@@ -705,10 +675,10 @@ useEffect(() => {
         else if (!settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) reason = "Target board/thread not set";
         
         setAutonomousBotStatus(`Inactive - ${reason}`);
-        if(autonomousBotActive) { 
+        if(autonomousBotActive) { // Only log if it was supposed to be active
              addLog(`Autonomous bot cannot run: ${reason}. Stopping.`, "bot_error");
         }
-        setAutonomousBotActive(false); 
+        setAutonomousBotActive(false); // Ensure bot is marked inactive
         return;
     }
     
@@ -716,29 +686,30 @@ useEffect(() => {
     const currentBotTargetThreadIdClean = settings.autonomousBotTargetThreadId.trim();
     const botTargetKey = `${currentBotTargetBoardClean}_${currentBotTargetThreadIdClean}`;
 
+    // Clear conversation context if bot target thread changes
     if (geminiDvachConversations.has(botTargetKey) && 
         (geminiDvachConversations.get(botTargetKey)?.board !== currentBotTargetBoardClean || 
          geminiDvachConversations.get(botTargetKey)?.threadId !== currentBotTargetThreadIdClean)) {
         addAutonomousBotActivityLog(`Bot target thread changed. Clearing previous conversation context for ${botTargetKey}.`, 'bot_setup');
         setGeminiDvachConversations(prev => {
             const newMap = new Map(prev);
-            newMap.delete(botTargetKey); 
+            newMap.delete(botTargetKey); // Remove old context for this key if board/thread changed
             return newMap;
         });
-        setCurrentBotOpMediaCache(null); 
+        setCurrentBotOpMediaCache(null); // Clear OP media cache as well
     }
 
 
     const runBotCycle = async () => {
-        if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) { 
+        if (!autonomousBotActive || !ai || !dvachSessionCookies?.passcode_auth) { // Re-check critical conditions
              addAutonomousBotActivityLog("Бот остановлен в начале цикла: отсутствует критическое условие (AI, логин).", 'bot_error');
              setAutonomousBotActive(false);
              return;
         }
 
-        const currentBotSettings = { ...settings }; 
+        const currentBotSettings = { ...settings }; // Capture settings at the start of the cycle
         const botBoard = currentBotSettings.autonomousBotTargetBoard.trim();
-        const botThreadId = currentBotSettings.autonomousBotTargetThreadId.trim(); 
+        const botThreadId = currentBotSettings.autonomousBotTargetThreadId.trim(); // This is the OP post number of the target thread
         
         if (!botBoard || !botThreadId) {
             addAutonomousBotActivityLog("Целевая доска/тред для бота не установлены в настройках этого цикла. Остановка бота.", 'bot_error');
@@ -765,7 +736,7 @@ useEffect(() => {
             if (!threadPostsResponse || threadPostsResponse.threads?.[0]?.posts?.length === 0) {
                 addAutonomousBotActivityLog("Посты не найдены или ошибка при загрузке треда. Пропуск цикла.", 'bot_warning');
                 setAutonomousBotStatus("Ошибка загрузки данных треда для бота.");
-                if (currentConversation) {
+                if (currentConversation) { // Update last checked even on error to avoid spamming fetches
                     currentConversation.lastCheckedTimestamp = Date.now();
                     setGeminiDvachConversations(prev => new Map(prev).set(currentBotTargetKeyForCycle, {...currentConversation!}));
                 }
@@ -776,6 +747,7 @@ useEffect(() => {
             
             let initialOpTextForConvo = "";
 
+            // Initialize or update conversation context
             if (!currentConversation || currentConversation.status === 'archived' || currentConversation.board !== botBoard || currentConversation.threadId !== botThreadId) {
                 addAutonomousBotActivityLog(`Создание нового контекста беседы для треда ${currentBotTargetKeyForCycle}.`, 'bot_setup');
                 initialOpTextForConvo = opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A";
@@ -783,14 +755,14 @@ useEffect(() => {
                 
                 currentConversation = {
                     id: currentBotTargetKeyForCycle, board: botBoard, threadId: botThreadId,
-                    triggerPostNum: opPost?.num || botThreadId, 
+                    triggerPostNum: opPost?.num || botThreadId, // For bot, trigger is often the OP
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
                     history: [{ role: 'system', parts: [{text: systemMessageText}], timestamp: Date.now(), id: `system-init-${Date.now()}` }],
                     lastCheckedTimestamp: Date.now(), participatingPostNumbers: [opPost?.num || botThreadId],
                     status: 'context_built',
-                    initialContext: { opPostText: initialOpTextForConvo, opPostMediaParts: [], precedingPostsText: [] }
+                    initialContext: { opPostNum: opPost?.num, opPostText: initialOpTextForConvo, opPostMediaParts: [], precedingPostsText: [] }
                 };
-            } else { 
+            } else { // Update existing conversation
                  let updatedHistory = [...currentConversation.history];
                  const knownPostNumbersInHistoryOrProcessed = new Set([
                     ...updatedHistory.flatMap(msg => msg.parts.filter(p => p.text?.startsWith(">>")).map(p => p.text!.split("\n")[0].substring(2))),
@@ -798,6 +770,7 @@ useEffect(() => {
                  ]);
                  
                  const newPostsFromThread = allPostsInThread.filter(p => 
+                    p.timestamp * 1000 > currentConversation!.lastCheckedTimestamp && // Only posts newer than last check
                     !knownPostNumbersInHistoryOrProcessed.has(p.num) &&
                     (!sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId) || currentBotSettings.autonomousBotAllowReplyToSelf)
                 );
@@ -809,6 +782,7 @@ useEffect(() => {
                         updatedHistory.push({id: p.num, role: 'user', parts: [{text: postContentForHistory}], timestamp: p.timestamp * 1000 });
                         currentConversation!.participatingPostNumbers.push(p.num);
                     });
+                    // Trim history if it gets too long, preserving system messages
                     if (updatedHistory.length > 30) { 
                         const systemMessages = updatedHistory.filter(msg => msg.role === 'system');
                         const nonSystemMessages = updatedHistory.filter(msg => msg.role !== 'system');
@@ -821,6 +795,7 @@ useEffect(() => {
                  initialOpTextForConvo = currentConversation.initialContext?.opPostText || (opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A");
             }
 
+            // Analyze OP media if enabled and not already cached for this OP post
             if (opPost && currentBotSettings.geminiAnalyzeOpMedia &&
                 (!currentBotOpMediaCache || currentBotOpMediaCache.threadId !== botThreadId || currentBotOpMediaCache.opPostNum !== opPost.num)) {
                 addAutonomousBotActivityLog(`Обновление/создание кэша медиа ОП-поста (>>${opPost.num})...`, 'bot_setup');
@@ -828,13 +803,13 @@ useEffect(() => {
                 let opMediaContextTextAccumulator = "";
                 if (opPost.files && opPost.files.length > 0) {
                     const imagesToAnalyzeForOp = opPost.files
-                        .filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9) 
+                        .filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9) // Common image types
                         .slice(0, currentBotSettings.maxImagesToAnalyzePerPost);
                     
                     for (const file of imagesToAnalyzeForOp) {
                         try {
                             const imageUrl = `${DVACH_DOMAINS[0]}${file.path}`; 
-                            const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, currentBotSettings.proxyModeForImagesGET, currentBotSettings.customProxyUrlForImagesGET);
+                            const proxiedImageUrl = buildProxiedGetUrl(imageUrl, currentBotSettings.proxyModeForImagesGET, currentBotSettings.customProxyUrlForImagesGET);
                             addAutonomousBotActivityLog(`Фетчинг изображения ОП-поста ${file.name} (>>${opPost.num}) используя прокси '${currentBotSettings.proxyModeForImagesGET}' с URL: ${proxiedImageUrl}`, 'bot_activity');
                             const imgResp = await fetch(proxiedImageUrl);
                             if (!imgResp.ok) throw new Error(`Proxy fetch failed for OP image ${file.name}: ${imgResp.status} ${imgResp.statusText}`);
@@ -854,14 +829,15 @@ useEffect(() => {
                 setCurrentBotOpMediaCache({ threadId: botThreadId, opPostNum: opPost.num, mediaParts: opMediaPartsAccumulator, mediaContextText: opMediaContextTextAccumulator });
                 if (currentConversation.initialContext) {
                   currentConversation.initialContext.opPostMediaParts = opMediaPartsAccumulator;
-                  currentConversation.initialContext.opPostText = `${initialOpTextForConvo}${opMediaContextTextAccumulator}`;
+                  currentConversation.initialContext.opPostText = `${initialOpTextForConvo}${opMediaContextTextAccumulator}`; // Append media context to OP text
                 }
                 addAutonomousBotActivityLog(`Кэш медиа ОП-поста обновлен. ${opMediaPartsAccumulator.length} изображений.`, 'bot_setup');
             } else if (!opPost || !currentBotSettings.geminiAnalyzeOpMedia) {
-                setCurrentBotOpMediaCache(null); 
+                setCurrentBotOpMediaCache(null); // No OP post or analysis disabled
                 if (currentConversation.initialContext) currentConversation.initialContext.opPostMediaParts = [];
             }
             
+            // Bot Reply Logic (Example for 'random_in_thread')
             if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
                 setAutonomousBotStatus("Режим 'random_in_thread': Поиск цели...");
                 const botPostNumbers = new Set(sentMessages
@@ -869,10 +845,10 @@ useEffect(() => {
                     .map(sm => sm.num));
 
                 const eligiblePosts = allPostsInThread.filter(p => 
-                    p.num !== opPost?.num && 
+                    p.num !== opPost?.num && // Don't reply to OP directly in random mode (unless it's the only post)
                     (!botPostNumbers.has(p.num) || currentBotSettings.autonomousBotAllowReplyToSelf) && 
                     !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) &&
-                    !currentConversation!.participatingPostNumbers.includes(p.num) 
+                    !currentConversation!.participatingPostNumbers.includes(p.num) // Avoid replying to posts already in conversation history for this cycle
                 );
 
                 if (eligiblePosts.length === 0) {
@@ -882,8 +858,9 @@ useEffect(() => {
                     addAutonomousBotActivityLog(`Бот выбрал случайный пост >>${targetPost.num} для ответа.`, 'bot_activity');
                     setAutonomousBotStatus(`Генерация ответа на >>${targetPost.num}...`);
 
-                    let geminiCallHistoryForContent = currentConversation.history
-                        .filter(msg => msg.role === 'user' || msg.role === 'model') 
+                    // Prepare conversation history for Gemini, including OP context and media if available
+                    let geminiCallHistoryForContent: { role: string, parts: Part[] }[] = currentConversation.history
+                        .filter(msg => msg.role === 'user' || msg.role === 'model') // Only user/model for actual conversation flow
                         .map(msg => ({ role: msg.role, parts: msg.parts }));
                     
                     let promptForTargetPost = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
@@ -894,7 +871,7 @@ useEffect(() => {
                         for (const file of imagesInTarget) {
                              try {
                                 const imageUrl = `${DVACH_DOMAINS[0]}${file.path}`;
-                                const proxiedImageUrl = buildProxiedGetUrlForApp(imageUrl, currentBotSettings.proxyModeForImagesGET, currentBotSettings.customProxyUrlForImagesGET);
+                                const proxiedImageUrl = buildProxiedGetUrl(imageUrl, currentBotSettings.proxyModeForImagesGET, currentBotSettings.customProxyUrlForImagesGET);
                                 addAutonomousBotActivityLog(`Фетчинг изображения ${file.name} из поста >>${targetPost.num} используя прокси '${currentBotSettings.proxyModeForImagesGET}'`, 'bot_activity');
                                 const imgResp = await fetch(proxiedImageUrl);
                                 if (!imgResp.ok) throw new Error(`Proxy fetch failed for target image ${file.name}: ${imgResp.status}`);
@@ -912,7 +889,10 @@ useEffect(() => {
                         }
                     }
                     
-                    const finalUserMessageParts: Part[] = [...targetImageParts, { text: promptForTargetPost + `\nСгенерируй свой ответ.` }];
+                    // Add OP media if cached and relevant (e.g. if conversation history is short or first reply)
+                    const opMediaToInclude = currentBotOpMediaCache?.threadId === botThreadId && currentBotOpMediaCache.opPostNum === opPost?.num ? currentBotOpMediaCache.mediaParts : [];
+
+                    const finalUserMessageParts: Part[] = [...opMediaToInclude, ...targetImageParts, { text: promptForTargetPost + `\nСгенерируй свой ответ.` }];
                     geminiCallHistoryForContent.push({ role: 'user', parts: finalUserMessageParts });
                     
                     const systemMessageFromHistory = currentConversation.history.find(msg => msg.role === 'system');
@@ -944,7 +924,7 @@ useEffect(() => {
                                 
                             addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${rawReplyBody.substring(0, 70)}...`);
                             
-                            await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000)); 
+                            await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000)); // Short random delay
 
                             let finalFileToPostForBot: File | null = null;
                             if (currentBotSettings.geminiReplyWithGeneratedImage) {
@@ -960,6 +940,7 @@ useEffect(() => {
                             }
 
                             try {
+                                // For Dvach API: 'thread' is OP num, 'parent' is post replied to.
                                 const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThreadId, targetPost.num);
                                 setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThreadId, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
                                 
@@ -975,7 +956,7 @@ useEffect(() => {
                                  if (pe.message.toLowerCase().includes("вы постите слишком быстро") || pe.message.includes("-8")) {
                                     addAutonomousBotActivityLog(`Ошибка постинга: ${pe.message}. Пропуск этого ответа.`, 'bot_warning');
                                  } else {
-                                    throw pe; 
+                                    throw pe; // Re-throw other post errors to be caught by main cycle catch
                                  }
                             }
                         } else {
@@ -986,12 +967,15 @@ useEffect(() => {
                     }
                 }
             } else if (currentBotSettings.autonomousBotReplyMode === 'replies_to_bot') {
+                 // TODO: Implement logic for 'replies_to_bot' mode
+                 // This would involve scanning newPostsFromThread for mentions of currentConversation.lastBotReplyNum
                  addAutonomousBotActivityLog("Режим 'replies_to_bot' требует дополнительной доработки.", 'bot_warning');
             }
             
+            // Persist updated conversation context
             setGeminiDvachConversations(prev => {
                 const newMap = new Map(prev);
-                if (currentConversation) { 
+                if (currentConversation) { // Ensure currentConversation is defined
                     newMap.set(currentBotTargetKeyForCycle, {...currentConversation});
                 }
                 return newMap;
@@ -1003,7 +987,7 @@ useEffect(() => {
             const errorMsg = (error as Error).message;
             addAutonomousBotActivityLog(`Критическая ошибка в цикле бота: ${errorMsg}`, 'bot_error', error);
             setAutonomousBotStatus(`Ошибка в цикле: ${errorMsg.substring(0, 50)}...`);
-            if(currentConversation) {
+            if(currentConversation) { // Log error state to conversation
                 currentConversation = {...currentConversation, status: 'error', lastCheckedTimestamp: Date.now()};
                 setGeminiDvachConversations(prev => new Map(prev).set(currentBotTargetKeyForCycle, currentConversation!));
             }
@@ -1013,15 +997,16 @@ useEffect(() => {
     addLog(`Автономный бот запускается... Интервал: ${settings.autonomousBotCycleIntervalSeconds}с. Режим: ${settings.autonomousBotReplyMode}. Цель: /${settings.autonomousBotTargetBoard.trim()}/${settings.autonomousBotTargetThreadId.trim()}`, 'bot_setup');
     setAutonomousBotStatus("Активен - Подготовка к первому циклу...");
     
+    // Initial run with a short delay, then interval
     const initialTimeoutId = setTimeout(() => {
-        if (autonomousBotActive) runBotCycle(); 
-    }, 3000); 
+        if (autonomousBotActive) runBotCycle(); // Check if still active before running
+    }, 3000); // Initial delay before first cycle
 
     autonomousBotIntervalRef.current = setInterval(() => {
-      if (autonomousBotActive) runBotCycle(); 
+      if (autonomousBotActive) runBotCycle(); // Check if still active before running
     }, settings.autonomousBotCycleIntervalSeconds * 1000) as unknown as number;
 
-    return () => { 
+    return () => { // Cleanup on unmount or when dependencies change causing re-run
         clearTimeout(initialTimeoutId);
         if (autonomousBotIntervalRef.current) {
             clearInterval(autonomousBotIntervalRef.current);
@@ -1030,7 +1015,7 @@ useEffect(() => {
         addLog("Интервал автономного бота остановлен (из-за useEffect cleanup).", "bot_setup");
     };
 // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [autonomousBotActive, ai, dvachSessionCookies, settings.autonomousBotTargetBoard, settings.autonomousBotTargetThreadId, settings.autonomousBotReplyMode, settings.autonomousBotCycleIntervalSeconds]); 
+}, [autonomousBotActive, ai, dvachSessionCookies, settings.autonomousBotTargetBoard, settings.autonomousBotTargetThreadId, settings.autonomousBotReplyMode, settings.autonomousBotCycleIntervalSeconds]); // Add other relevant settings if they should trigger a restart/re-config of the bot
   
   const toggleTheme = () => {
     const newTheme = settings.theme === 'light' ? 'dark' : settings.theme === 'dark' ? 'system' : 'light';
@@ -1046,13 +1031,14 @@ useEffect(() => {
 
 
   const renderDvachPostCard = (post: DvachPost, index: number) => {
+     // Use board/thread from current viewer settings for identifying "my posts"
      const boardIdentifier = currentBoard.trim();
      const threadIdentifier = currentThreadId.trim();
      const sentMessageData = sentMessages.find(m => m.num === post.num && m.board === boardIdentifier && m.thread === threadIdentifier);
      const isMyPost = !!sentMessageData;
      const isGeminiPostByBot = sentMessageData?.isGeminiPost || false;
 
-     const isGeminiReplyToThis = sentMessages.some(m => m.geminiTriggerPostNum === post.num && m.isGeminiPost);
+     const isGeminiReplyToThis = sentMessages.some(m => m.geminiTriggerPostNum === post.num && m.isGeminiPost && m.board === boardIdentifier && m.thread === threadIdentifier);
     
      const cardBg = isMyPost
        ? (isGeminiPostByBot ? "bg-purple-50 dark:bg-purple-900/50" : "bg-blue-50 dark:bg-blue-900/50")
@@ -1081,6 +1067,7 @@ useEffect(() => {
              target="_blank" rel="noopener noreferrer"
              className="hover:underline text-blue-500 dark:text-blue-400"
              onClick={(e) => { e.preventDefault(); document.getElementById(`post-${post.num}`)?.scrollIntoView({behavior: 'smooth'}); }}
+             aria-label={`Link to post number ${post.num} on Dvach`}
           >
             {post.num}
           </a>
@@ -1099,7 +1086,8 @@ useEffect(() => {
             const imageBaseUrl = DVACH_DOMAINS[0]; 
             const fileUrl = `${imageBaseUrl}${file.path}`;
             const thumbUrl = `${imageBaseUrl}${file.thumbnail}`;
-            const proxiedThumbUrl = buildProxiedGetUrlForApp(thumbUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
+            // Use buildProxiedGetUrl for images
+            const proxiedThumbUrl = buildProxiedGetUrl(thumbUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
 
             return (
             <a key={fileIndex} href={fileUrl} target="_blank" rel="noopener noreferrer" className="block w-24 h-24 group relative">
@@ -1111,7 +1099,7 @@ useEffect(() => {
                 onError={(e) => { 
                     addLog(`Failed to load thumbnail via proxy '${settings.proxyModeForImagesGET}': ${proxiedThumbUrl} (original: ${thumbUrl}). Attempting direct.`, 'warning');
                     (e.target as HTMLImageElement).src = thumbUrl; 
-                    (e.target as HTMLImageElement).onerror = null; 
+                    (e.target as HTMLImageElement).onerror = null; // Prevent infinite loop on error
                 }}
               />
               <div className="absolute bottom-0 left-0 bg-black bg-opacity-50 text-white text-xs p-0.5 truncate w-full group-hover:opacity-100 opacity-0 transition-opacity">
@@ -1125,7 +1113,7 @@ useEffect(() => {
 
       <div 
         className="prose prose-sm dark:prose-invert max-w-none break-words"
-        dangerouslySetInnerHTML={{ __html: post.comment.replace(/&gt;&gt;(\d+)/g, (_match, p1) => `<a href="#post-${p1}" class="text-blue-500 dark:text-blue-400 hover:underline" data-replyto="${p1}">&gt;&gt;${p1}</a>`) }}
+        dangerouslySetInnerHTML={{ __html: post.comment.replace(/&gt;&gt;(\d+)/g, (_match, p1) => `<a href="#post-${p1}" class="text-blue-500 dark:text-blue-400 hover:underline" data-replyto="${p1}" aria-label="Reply to post ${p1}">&gt;&gt;${p1}</a>`) }}
       />
 
       <div className="mt-2 text-right">
@@ -1135,6 +1123,7 @@ useEffect(() => {
           disabled={geminiLoading || !ai || !dvachSessionCookies?.passcode_auth || !boardIdentifier || !threadIdentifier}
           className="px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           title={!ai ? "Gemini AI not initialized. Check API Key." : !dvachSessionCookies?.passcode_auth ? "Login to Dvach to reply." : "Reply to this post using Gemini AI"}
+          aria-label={`Reply to post ${post.num} with Gemini`}
         >
           <IconSparkles className="mr-1 h-4 w-4"/> Reply with Gemini
         </button>
