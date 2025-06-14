@@ -22,7 +22,7 @@ import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu, 
   IconSparkles, IconAlertTriangle, IconRefresh, 
   IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat,
-  IconSun, IconMoon 
+  IconSun, IconMoon, IconEye
 } from './components/Icons'; 
 
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
@@ -59,7 +59,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
-  autonomousBotSystemPrompt: "Твоя задача - отвечать на посты на имиджборде. Пиши как обычный аноним. Ответ должен быть как от анонима: остроумный, ироничный или информативный, в зависимости от контекста. ВАЖНО: твой ответ (значение для поля 'replyText' в JSON) ДОЛЖЕН начинаться с '>>НОМЕР_ПОСТА_НА_КОТОРЫЙ_ОТВЕЧАЕШЬ\\n', за которым следует сам текст твоего ответа. Замени 'НОМЕР_ПОСТА_НА_КОТОРЫЙ_ОТВЕЧАЕШЬ' на актуальный номер поста. Не добавляй никакого текста вне JSON объекта.",
+  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда. Твои ответы должны быть остроумными, ироничными или информативными, в зависимости от контекста. Пиши в стиле, характерном для имиджбордов.",
   botAnalyzesImagesInTriggerPosts: true,
   autonomousBotReplyMode: 'random_in_thread', 
   autonomousBotCycleIntervalSeconds: 75, 
@@ -142,10 +142,10 @@ const formatLogDataForDisplay = (data: unknown): string => {
             const convo = data as GeminiDvachConversation;
             let historySummary = "No history.";
             if (convo.history && convo.history.length > 0) {
-                historySummary = convo.history.slice(-5).map(msg => `${msg.role}: "${(msg.parts[0]?.text || "").substring(0,30)}..."`).join('; ');
+                historySummary = convo.history.slice(-10).map(msg => `${msg.role}: "${(msg.parts[0]?.text || "").substring(0,50)}..."`).join('; ');
             }
-            const opText = convo.initialContext?.opPostText ? `OP: "${convo.initialContext.opPostText.substring(0,30)}..."` : "No OP context";
-            return `GeminiDvachConversation (ID: ${convo.id}, Trigger: >>${convo.triggerPostNum}, Status: ${convo.status}, LastBotReply: >>${convo.lastBotReplyNum || 'N/A'}, Hist (${convo.history?.length || 0}): ${historySummary}. Context: ${opText})`;
+            const opText = convo.initialContext?.opPostText ? `OP: "${convo.initialContext.opPostText.substring(0,50)}..."` : "No OP context";
+            return `GeminiDvachConversation (ID: ${convo.id}, Trigger: >>${convo.triggerPostNum}, Status: ${convo.status}, LastBotReply: >>${convo.lastBotReplyNum || 'N/A'}, Hist (${convo.history?.length || 0}): ${historySummary}. Context: ${opText}`;
         }
         if ('num' in data && 'comment' in data && 'timestamp' in data && !('threads' in data)) {
             const post = data as DvachPost;
@@ -354,7 +354,7 @@ const App: React.FC = () => {
         if (!prevApiKey || prevApiKey !== keyToUse) {
             addLog('Gemini API initialized successfully.', 'success');
             if (!initBotJsonInfoLoggedRef.current) {
-                 addLog("Note on Bot's JSON Generation: The autonomous bot now uses Gemini's native JSON output (responseSchema) for increased reliability. The system prompt instructs Gemini on *content* (including `>>POST_NUMBER` for replies) but not on JSON structure itself.", 'system');
+                 addLog("Note on Bot's JSON Generation: The autonomous bot uses Gemini's native JSON output (responseSchema) for structure. The bot's system prompt guides reply *content and style* only. Client-side code prepends '>>POST_NUMBER'.", 'system');
                  initBotJsonInfoLoggedRef.current = true;
             }
         }
@@ -377,7 +377,6 @@ const App: React.FC = () => {
   };
   
   useEffect(() => {
-    // Sync local state for manual ops panel only when global settings change, not on tab switch.
     setCurrentBoard(settings.board.trim());
     setCurrentThreadId(settings.threadId.trim());
   }, [settings.board, settings.threadId]);
@@ -460,8 +459,8 @@ const App: React.FC = () => {
     replyToPostNumForDvachApi?: string  
   ): Promise<string> => { 
     const boardToPost = boardToPostInput.trim();
-    const threadIdForDvachApi = threadIdForDvachApiInput.trim(); // This is the OP post num of the thread
-    const finalReplyToPostNum = replyToPostNumForDvachApi?.trim(); // This is the specific post num being replied to
+    const threadIdForDvachApi = threadIdForDvachApiInput.trim(); 
+    const finalReplyToPostNum = replyToPostNumForDvachApi?.trim(); 
 
     if (!dvachSessionCookies?.passcode_auth) {
       const errorMsg = 'Not logged into Dvach or session expired. Please login first.';
@@ -477,7 +476,6 @@ const App: React.FC = () => {
       throw new Error(errorMsg);
     }
     
-    // Dvach API 'thread' field: "0" for new thread, OP_POST_NUM for existing thread.
     const effectiveThreadIdForDvach = (!threadIdForDvachApi || threadIdForDvachApi === "0") ? "0" : threadIdForDvachApi;
     
     const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
@@ -537,12 +535,9 @@ const App: React.FC = () => {
   const handleSimplePost = async () => { 
     try {
       const board = currentBoard.trim();
-      const threadContext = currentThreadId.trim(); // This is the OP post number of the thread from manual input
+      const threadContext = currentThreadId.trim(); 
       const threadTargetForDvach = threadContext && threadContext !== "0" ? threadContext : "0";
       
-      // For a simple post from this UI, it's assumed not to be a reply to a *specific* post,
-      // but rather a general post to the thread (or new thread if threadTargetForDvach is "0").
-      // The `parentPostNumForDvachApi` is thus undefined here.
       await commonPostToDvach(postText, postFile, postUseSage, board, threadTargetForDvach, undefined);
       setPostText('');
       setPostFile(null);
@@ -557,16 +552,13 @@ const App: React.FC = () => {
         return; 
     }
     const boardForReply = currentBoard.trim();
-    const threadForReply = currentThreadId.trim(); // This is the OP of the current thread
+    const threadForReply = currentThreadId.trim();
     if (!boardForReply || !threadForReply) { addLog('Current board or thread ID not set for manual reply.', 'error'); return; }
 
     setGeminiLoading(true);
     addLog(`Gemini preparing manual reply to post >>${targetPost.num} on /${boardForReply}/${threadForReply}...`, 'gemini');
     
     let systemInstructionForReply = settings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
-    if (!systemInstructionForReply.toLowerCase().includes(">>post_number")) { 
-        systemInstructionForReply += " If quoting another post, start your reply with '>>POST_NUMBER\\n'.";
-    }
     
     let threadContextSummary = "No additional thread context available from viewer.";
     const opPost = currentFetchedDvachPosts.find(p => p.num === threadForReply || p.op === 1);
@@ -639,7 +631,7 @@ const App: React.FC = () => {
             }
         }
     }
-    geminiMessageParts.push({ text: userPromptText + `\n\nGenerate your reply to >>${targetPost.num}. Remember to start your reply text with ">>${targetPost.num}\\n" if you are directly quoting or addressing it.` });
+    geminiMessageParts.push({ text: userPromptText + `\n\nGenerate your reply to >>${targetPost.num}.` });
     
     let geminiReplyText = "";
     try {
@@ -654,17 +646,15 @@ const App: React.FC = () => {
           thinkingConfig: settings.useThinkingBudget ? { thinkingBudget: settings.geminiThinkingBudget } : undefined
         }
       });
-      geminiReplyText = response.text || ""; 
-      // Ensure the reply correctly starts with >>TARGET_POST_NUM if Gemini didn't include it.
-      if (!geminiReplyText.trim().startsWith(`>>${targetPost.num}`)) { 
-          geminiReplyText = `>>${targetPost.num}\n${geminiReplyText.trim()}`;
-      }
+      const rawGeminiText = response.text || "";
+      geminiReplyText = `>>${targetPost.num}\n${rawGeminiText.trim()}`; // Client-side prefixing
+      
       addLog(`Gemini generated text for manual reply to >>${targetPost.num}: ${geminiReplyText.substring(0, 100)}...`, 'gemini');
 
       let finalFileToPost: File | null = null;
       if (settings.geminiReplyWithGeneratedImage) {
         addLog(`Gemini generating image for manual reply to >>${targetPost.num}...`, 'gemini');
-        const imagePpt = `Imageboard reply context: "${geminiReplyText.substring(geminiReplyText.indexOf('\n') + 1, 200).trim()}". Style: relevant, meme-like, or abstract.`;
+        const imagePpt = `Imageboard reply context: "${rawGeminiText.substring(0, 200).trim()}". Style: relevant, meme-like, or abstract.`;
         try {
             const imgGenResp = await ai.models.generateImages({ 
               model: GEMINI_IMAGE_MODEL, 
@@ -684,7 +674,6 @@ const App: React.FC = () => {
             }
         }
       }
-      // For manual reply, threadForReply is the OP post number, targetPost.num is the specific post being replied to.
       const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, boardForReply, threadForReply, targetPost.num);
       
       setSentMessages(prev => prev.map(msg => 
@@ -694,7 +683,6 @@ const App: React.FC = () => {
       addLog(`Manual Gemini reply posted as >>${newPostNumByGemini} to /${boardForReply}/${threadForReply}.`, 'success');
 
     } catch (error) {
-      // Error logging is handled by commonPostToDvach or generic logic below if not a post error.
       if (! (error as Error).message.toLowerCase().includes("post failed") && ! (error as Error).message.toLowerCase().includes("dvach login")) { 
          addLog(`Error during manual Gemini reply generation for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
       }
@@ -754,7 +742,7 @@ useEffect(() => {
 
         const currentBotSettings = { ...settings }; 
         const botBoard = currentBotSettings.autonomousBotTargetBoard.trim();
-        const botThreadId = currentBotSettings.autonomousBotTargetThreadId.trim(); // This is the OP of the thread
+        const botThreadId = currentBotSettings.autonomousBotTargetThreadId.trim(); 
         
         if (!botBoard || !botThreadId) {
             addAutonomousBotActivityLog("Целевая доска/тред для бота не установлены в настройках этого цикла. Остановка бота.", 'bot_error');
@@ -789,30 +777,35 @@ useEffect(() => {
             }
             const allPostsInThread = threadPostsResponse.threads[0].posts;
             const opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
+            const initialContextParts: Part[] = [];
+            let initialOpTextForConvo = "";
 
             if (!currentConversation || currentConversation.status === 'archived' || currentConversation.board !== botBoard || currentConversation.threadId !== botThreadId) {
                 addAutonomousBotActivityLog(`Создание нового контекста беседы для треда ${currentBotTargetKeyForCycle}.`, 'bot_setup');
-                const opPostText = opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A";
+                initialOpTextForConvo = opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A";
+                const systemMessageText = `Initial context for thread /${botBoard}/${botThreadId}. OP Post (>>${opPost?.num || 'N/A'}): ${initialOpTextForConvo}`;
+                initialContextParts.push({text: systemMessageText});
+
                 currentConversation = {
-                    id: currentBotTargetKeyForCycle,
-                    board: botBoard,
-                    threadId: botThreadId,
+                    id: currentBotTargetKeyForCycle, board: botBoard, threadId: botThreadId,
                     triggerPostNum: opPost?.num || botThreadId, 
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
-                    history: [{ role: 'system', parts: [{text: `Initial context for thread /${botBoard}/${botThreadId}. OP Post (>>${opPost?.num || 'N/A'}): ${opPostText}`}], timestamp: Date.now(), id: `system-init-${Date.now()}` }],
-                    lastCheckedTimestamp: Date.now(),
-                    participatingPostNumbers: [opPost?.num || botThreadId],
+                    history: [{ role: 'system', parts: initialContextParts, timestamp: Date.now(), id: `system-init-${Date.now()}` }],
+                    lastCheckedTimestamp: Date.now(), participatingPostNumbers: [opPost?.num || botThreadId],
                     status: 'context_built',
-                    initialContext: { opPostText: opPostText, opPostMediaParts: [], precedingPostsText: [], targetPostText: opPostText },
+                    initialContext: { opPostText: initialOpTextForConvo, opPostMediaParts: [], precedingPostsText: [] }
                 };
-            } else { // Update existing conversation with new posts
+            } else { 
                  let updatedHistory = [...currentConversation.history];
                  const knownPostNumbersInHistoryOrProcessed = new Set([
                     ...updatedHistory.flatMap(msg => msg.parts.filter(p => p.text?.startsWith(">>")).map(p => p.text!.split("\n")[0].substring(2))),
                     ...currentConversation.participatingPostNumbers
                  ]);
                  
-                 const newPostsFromThread = allPostsInThread.filter(p => !knownPostNumbersInHistoryOrProcessed.has(p.num));
+                 const newPostsFromThread = allPostsInThread.filter(p => 
+                    !knownPostNumbersInHistoryOrProcessed.has(p.num) &&
+                    (!sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId) || currentBotSettings.autonomousBotAllowReplyToSelf)
+                );
 
                  if (newPostsFromThread.length > 0) {
                     addAutonomousBotActivityLog(`Добавление ${newPostsFromThread.length} новых постов в контекст беседы.`, 'bot_setup');
@@ -821,15 +814,17 @@ useEffect(() => {
                         updatedHistory.push({id: p.num, role: 'user', parts: [{text: postContentForHistory}], timestamp: p.timestamp * 1000 });
                         currentConversation!.participatingPostNumbers.push(p.num);
                     });
-                    if (updatedHistory.length > 50) { 
+                    // Limit history to prevent excessive context length
+                    if (updatedHistory.length > 30) { // Keep system prompts, trim user/model
                         const systemMessages = updatedHistory.filter(msg => msg.role === 'system');
                         const nonSystemMessages = updatedHistory.filter(msg => msg.role !== 'system');
-                        updatedHistory = [...systemMessages, ...nonSystemMessages.slice(- (50 - systemMessages.length))];
+                        updatedHistory = [...systemMessages, ...nonSystemMessages.slice(- (30 - systemMessages.length))];
                     }
                     currentConversation = {...currentConversation, history: updatedHistory, lastCheckedTimestamp: Date.now()};
                  } else {
                     currentConversation = {...currentConversation, lastCheckedTimestamp: Date.now()};
                  }
+                 initialOpTextForConvo = currentConversation.initialContext?.opPostText || (opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A");
             }
 
             if (opPost && currentBotSettings.geminiAnalyzeOpMedia &&
@@ -865,7 +860,7 @@ useEffect(() => {
                 setCurrentBotOpMediaCache({ threadId: botThreadId, opPostNum: opPost.num, mediaParts: opMediaPartsAccumulator, mediaContextText: opMediaContextTextAccumulator });
                 if (currentConversation.initialContext) {
                   currentConversation.initialContext.opPostMediaParts = opMediaPartsAccumulator;
-                  currentConversation.initialContext.opPostText = `${opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A"}${opMediaContextTextAccumulator}`;
+                  currentConversation.initialContext.opPostText = `${initialOpTextForConvo}${opMediaContextTextAccumulator}`;
                 }
                 addAutonomousBotActivityLog(`Кэш медиа ОП-поста обновлен. ${opMediaPartsAccumulator.length} изображений.`, 'bot_setup');
             } else if (!opPost || !currentBotSettings.geminiAnalyzeOpMedia) {
@@ -893,26 +888,12 @@ useEffect(() => {
                     addAutonomousBotActivityLog(`Бот выбрал случайный пост >>${targetPost.num} для ответа.`, 'bot_activity');
                     setAutonomousBotStatus(`Генерация ответа на >>${targetPost.num}...`);
 
-                    const geminiCallParts: Part[] = [];
-                    let promptForBot = `Ты отвечаешь на пост >>${targetPost.num} в треде /${botBoard}/${botThreadId}. `;
-                    
-                    if (currentConversation.initialContext?.opPostText) {
-                         promptForBot += `Контекст треда: ОП-пост (>>${opPost?.num || 'N/A'}) говорит: "${currentConversation.initialContext.opPostText.substring(0,200)}".\n`;
-                    }
-                    
-                    if (currentBotOpMediaCache?.mediaParts && currentBotOpMediaCache.mediaParts.length > 0) {
-                        geminiCallParts.push(...currentBotOpMediaCache.mediaParts);
-                    }
-                    
-                    const precedingPostsInHistory = currentConversation.history.filter(h => h.role === 'user' && parseInt(h.id) < parseInt(targetPost.num)).slice(-3);
-                    if (precedingPostsInHistory.length > 0) {
-                        promptForBot += "Несколько предыдущих постов в беседе:\n" + precedingPostsInHistory.map(h => h.parts[0]?.text?.substring(0,150) || "").join("\n") + "\n";
-                    }
-
-                    promptForBot += `Текст поста, на который нужно ответить (>>${targetPost.num}): "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}". `;
+                    const geminiCallHistory = [...currentConversation.history];
+                    let promptForTargetPost = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
 
                     if (currentBotSettings.botAnalyzesImagesInTriggerPosts && targetPost.files && targetPost.files.length > 0) {
                         const imagesInTarget = targetPost.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, currentBotSettings.maxImagesToAnalyzePerPost);
+                        const targetImageParts: Part[] = [];
                         for (const file of imagesInTarget) {
                              try {
                                 const imageUrl = `${DVACH_DOMAINS[0]}${file.path}`;
@@ -926,20 +907,23 @@ useEffect(() => {
                                      mimeType = file.type === 1 ? 'image/jpeg' : file.type === 2 ? 'image/png' : file.type === 4 ? 'image/gif' : file.type === 9 ? 'image/webp' : 'image/jpeg';
                                 }
                                 const base64 = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onloadend = () => res((r.result as string).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
-                                geminiCallParts.push({ inlineData: { mimeType: mimeType, data: base64 } });
-                                promptForBot += ` Этот пост содержит изображение '${file.name}'.`;
+                                targetImageParts.push({ inlineData: { mimeType: mimeType, data: base64 } });
+                                promptForTargetPost += ` Этот пост содержит изображение '${file.name}'.`;
                             } catch (e) {
                                 addAutonomousBotActivityLog(`Ошибка загрузки изображения ${file.name} из поста >>${targetPost.num}: ${(e as Error).message}`, 'bot_warning');
                             }
                         }
+                        if (targetImageParts.length > 0) {
+                           geminiCallHistory.push({ id: `img-context-${targetPost.num}`, role: 'user', parts: targetImageParts, timestamp: Date.now() });
+                        }
                     }
-                    geminiCallParts.push({ text: promptForBot + `\nСгенерируй свой ответ.` });
+                    geminiCallHistory.push({ id: `prompt-${targetPost.num}`, role: 'user', parts: [{ text: promptForTargetPost + `\nСгенерируй свой ответ.` }], timestamp: Date.now() });
                     
                     const geminiApiResponse = await ai.models.generateContent({
                         model: GEMINI_TEXT_MODEL,
-                        contents: [{role: 'user', parts: geminiCallParts}],
+                        contents: geminiCallHistory,
                         config: {
-                            systemInstruction: currentBotSettings.autonomousBotSystemPrompt.replace('НОМЕР_ПОСТА_НА_КОТОРЫЙ_ОТВЕЧАЕШЬ', targetPost.num), // Inject target post num for prompt
+                            systemInstruction: currentBotSettings.autonomousBotSystemPrompt,
                             temperature: 0.85, topK: 50, topP: 0.95, 
                             maxOutputTokens: AUTONOMOUS_BOT_GEMINI_MAX_OUTPUT_TOKENS,
                             responseMimeType: "application/json", 
@@ -955,17 +939,18 @@ useEffect(() => {
                     const textToParse = geminiApiResponse.text;
                     if (typeof textToParse === 'string') {
                         const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
-                        if (parsedReply && parsedReply.replyText && parsedReply.replyText.trim().startsWith(`>>${targetPost.num}`)) {
-                            const finalCommentToPost = parsedReply.replyText.trim(); // Already contains >>NUM
+                        if (parsedReply && parsedReply.replyText) {
+                            const rawReplyBody = parsedReply.replyText.trim();
+                            const finalCommentToPost = `>>${targetPost.num}\n${rawReplyBody}`; 
                                 
-                            addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${finalCommentToPost.substring(0, 70)}...`);
+                            addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${rawReplyBody.substring(0, 70)}...`);
                             
                             await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000)); 
 
                             let finalFileToPostForBot: File | null = null;
                             if (currentBotSettings.geminiReplyWithGeneratedImage) {
                                addLog(`Бот пытается сгенерировать изображение для ответа >>${targetPost.num}...`, 'gemini');
-                               const imageGenPromptText = `Изображение для ответа на имиджборде: "${finalCommentToPost.substring(finalCommentToPost.indexOf('\n')+1).substring(0,150)}"`; // Use text after >>NUM
+                               const imageGenPromptText = `Изображение для ответа на имиджборде: "${rawReplyBody.substring(0,150)}"`;
                                try {
                                    const imgGenResp = await ai.models.generateImages({ model: GEMINI_IMAGE_MODEL, prompt: imageGenPromptText, config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } });
                                    if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
@@ -979,7 +964,7 @@ useEffect(() => {
                                 const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThreadId, targetPost.num);
                                 setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThreadId, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
                                 
-                                const botReplyChatMessage: ChatMessage = { id: `bot-${newPostNum}`, role: 'model', parts: [{text: finalCommentToPost}], timestamp: Date.now() };
+                                const botReplyChatMessage: ChatMessage = { id: `bot-${newPostNum}`, role: 'model', parts: [{text: rawReplyBody}], timestamp: Date.now() }; // Store raw reply in history
                                 currentConversation = {...currentConversation!, 
                                     participatingPostNumbers: [...currentConversation!.participatingPostNumbers, targetPost.num, newPostNum],
                                     history: [...currentConversation!.history, botReplyChatMessage],
@@ -995,7 +980,7 @@ useEffect(() => {
                                  }
                             }
                         } else {
-                            addAutonomousBotActivityLog(`Ошибка парсинга JSON ответа Gemini, или replyText некорректный (не начинается с >>${targetPost.num}) для >>${targetPost.num}. Ответ: ${textToParse.substring(0,200)}`, 'bot_warning', parsedReply);
+                            addAutonomousBotActivityLog(`Ошибка парсинга JSON ответа Gemini или отсутствует replyText для >>${targetPost.num}. Ответ: ${textToParse.substring(0,200)}`, 'bot_warning', parsedReply);
                         }
                     } else {
                          addAutonomousBotActivityLog(`Ответ Gemini не содержит текстовой части для >>${targetPost.num}. Ответ: ${JSON.stringify(geminiApiResponse)}`, 'bot_warning');
@@ -1191,11 +1176,11 @@ useEffect(() => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
             <div>
                 <label htmlFor="manualBoard" className="block text-sm font-medium">Board (e.g., b):</label>
-                <input id="manualBoard" type="text" value={currentBoard} onChange={e => setCurrentBoard(e.target.value.trim())} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
+                <input id="manualBoard" type="text" value={currentBoard} onChange={e => setCurrentBoard(e.target.value)} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
             </div>
             <div>
                 <label htmlFor="manualThreadId" className="block text-sm font-medium">Thread ID (0 for new thread):</label>
-                <input id="manualThreadId" type="text" value={currentThreadId} onChange={e => setCurrentThreadId(e.target.value.trim())} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
+                <input id="manualThreadId" type="text" value={currentThreadId} onChange={e => setCurrentThreadId(e.target.value)} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
             </div>
         </div>
         <textarea 
@@ -1345,38 +1330,64 @@ useEffect(() => {
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
         <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Active Gemini-Dvach Conversations (Bot)</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Lists conversation contexts managed by the bot. Click ID to view details in main logs.</p>
-        <div className="max-h-80 overflow-y-auto custom-scrollbar">
+        <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-2">
             {geminiDvachConversations.size === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400 text-center">No active bot conversation contexts tracked.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No active bot conversation contexts tracked.</p>
             ) : (
                 Array.from(geminiDvachConversations.values())
                   .sort((a: GeminiDvachConversation, b: GeminiDvachConversation) => (b?.lastCheckedTimestamp || 0) - (a?.lastCheckedTimestamp || 0))
                   .map((convo: GeminiDvachConversation) => (
                     convo && convo.id ? (
-                      <div key={convo.id} className="p-2 mb-2 border rounded-md bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 text-xs">
-                          <p>
-                              ID: <button onClick={() => addLog("Bot Conversation Context Details:", 'info', convo)} className="text-blue-500 hover:underline truncate" title="Click to see full details in Logs tab">{convo.id}</button>
-                          </p>
-                          <p>Trigger/Seed: <span className="font-semibold">&gt;&gt;{convo.triggerPostNum}</span> on <span className="font-semibold">/{convo.board}/{convo.threadId}</span> {convo.isBotSeedConversation ? "(Bot Seed)" : ""}</p>
-                          <p>Status: <span className="font-semibold">{convo.status}</span> | Last Bot Reply: <span className="font-semibold">&gt;&gt;{convo.lastBotReplyNum || 'N/A'}</span></p>
-                          <p>History Length: {convo.history?.length || 0} | Last Checked: {new Date(convo.lastCheckedTimestamp).toLocaleTimeString()}</p>
-                          {convo.initialContext?.opPostText && (
-                            <p className="truncate" title={`OP Context: ${convo.initialContext.opPostText}`}>
-                                OP Context: "{convo.initialContext.opPostText.substring(0,70)}..."
-                                {convo.initialContext.opPostMediaParts && convo.initialContext.opPostMediaParts.length > 0 && ` (+${convo.initialContext.opPostMediaParts.length} media)`}
-                            </p>
-                          )}
-                          {convo.history && convo.history.length > 0 && (
-                            <div className="mt-1 pl-2 border-l-2 border-gray-500 dark:border-gray-400 max-h-24 overflow-y-auto custom-scrollbar-thin">
-                                <p className="text-xs italic">Last {Math.min(3, convo.history.length)} messages (incl. system/new posts):</p>
-                                {convo.history.slice(-3).map(histMsg => (
-                                    <p key={histMsg.id} className="text-xs truncate" title={histMsg.parts[0]?.text}>
-                                        <strong className="capitalize">{histMsg.role}:</strong> {(histMsg.parts[0]?.text || '[Non-text/Empty]').substring(0, 70)}...
-                                    </p>
-                                ))}
-                            </div>
-                          )}
-                      </div>
+                      <details key={convo.id} className="p-2.5 mb-2 border rounded-lg bg-gray-50 dark:bg-gray-700/60 border-gray-200 dark:border-gray-600 text-xs shadow-sm hover:shadow-md transition-shadow">
+                          <summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-300 select-none">
+                              ID: <button onClick={() => addLog("Bot Conversation Context Details:", 'info', convo)} className="text-indigo-500 hover:underline truncate" title="Click to see full details in Logs tab">{convo.id}</button>
+                              <span className="ml-2 text-gray-500 dark:text-gray-400">(Status: {convo.status} | Last Bot Reply: &gt;&gt;{convo.lastBotReplyNum || 'N/A'} | Hist: {convo.history?.length || 0})</span>
+                          </summary>
+                          <div className="mt-2 space-y-1.5 pl-2 border-l-2 border-gray-300 dark:border-gray-500">
+                            <p><strong>Trigger/Seed:</strong> <span className="font-semibold">&gt;&gt;{convo.triggerPostNum}</span> on <span className="font-semibold">/{convo.board}/{convo.threadId}</span> {convo.isBotSeedConversation ? "(Bot Seed)" : ""}</p>
+                            <p><strong>Last Checked:</strong> {new Date(convo.lastCheckedTimestamp).toLocaleTimeString()}</p>
+                            
+                            {convo.initialContext && (
+                              <details className="mt-1 text-xs">
+                                <summary className="cursor-pointer text-gray-600 dark:text-gray-400 italic">Initial Context Details...</summary>
+                                <div className="pl-3 pt-1 space-y-0.5">
+                                  {convo.initialContext.opPostText && <p><strong>OP Post (summary):</strong> "{convo.initialContext.opPostText.substring(0,200)}..."</p>}
+                                  {convo.initialContext.opPostMediaParts && convo.initialContext.opPostMediaParts.length > 0 && <p><strong>OP Media:</strong> {convo.initialContext.opPostMediaParts.length} item(s) analyzed.</p>}
+                                  {convo.initialContext.precedingPostsText && convo.initialContext.precedingPostsText.length > 0 && (
+                                    <div><strong>Preceding Posts ({convo.initialContext.precedingPostsText.length}):</strong>
+                                      <ul className="list-disc list-inside ml-4">
+                                        {convo.initialContext.precedingPostsText.slice(0,3).map((txt, idx) => <li key={`prec-${idx}`} className="truncate" title={txt}>"{txt.substring(0,70)}..."</li>)}
+                                        {convo.initialContext.precedingPostsText.length > 3 && <li>...and more.</li>}
+                                      </ul>
+                                    </div>
+                                  )}
+                                </div>
+                              </details>
+                            )}
+
+                            {convo.history && convo.history.length > 0 && (
+                              <div className="mt-2">
+                                <p className="font-medium text-gray-700 dark:text-gray-300">Last {Math.min(15, convo.history.length)} messages in conversation history:</p>
+                                <div className="max-h-48 overflow-y-auto custom-scrollbar-thin border border-gray-200 dark:border-gray-600 p-1.5 rounded-md bg-white dark:bg-gray-800">
+                                  {convo.history.slice(-15).map(histMsg => (
+                                      <div key={histMsg.id} className="mb-1 p-1 rounded-sm odd:bg-gray-100 dark:odd:bg-gray-700/50">
+                                        <p className="text-xs" title={histMsg.parts[0]?.text}>
+                                            <strong className="capitalize">
+                                                {histMsg.role === 'user' && histMsg.parts[0]?.text?.startsWith(">>") ? `User (${histMsg.parts[0].text.split("\n")[0]})` : histMsg.role}
+                                                :
+                                            </strong> 
+                                            <span className="ml-1">{(histMsg.parts[0]?.text || '[Non-text/Empty]').substring(0, 150)}
+                                            {(histMsg.parts[0]?.text || '').length > 150 ? '...' : ''}
+                                            </span>
+                                        </p>
+                                        {histMsg.parts.length > 1 && <p className="text-xs italic text-gray-500 dark:text-gray-400 ml-2">(+ {histMsg.parts.length -1} media/other parts)</p>}
+                                      </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                      </details>
                     ) : null
                 ))
             )}
@@ -1389,7 +1400,7 @@ useEffect(() => {
                 }
             }}
             disabled={geminiDvachConversations.size === 0}
-            className="mt-2 px-3 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
+            className="mt-3 px-3 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
         >
             <IconTrash className="mr-1 h-4 w-4"/> Clear All Tracked Conversation Contexts
         </button>
@@ -1567,9 +1578,9 @@ useEffect(() => {
                 </div>
             </div>
             <div className="mt-3">
-                <label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & JSON Format Instructions):</label>
-                <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({ autonomousBotSystemPrompt: e.target.value })} rows={6} className="mt-1 w-full p-2 input-style font-mono text-xs"/>
-                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Instruct Gemini to include `&gt;&gt;TARGET_POST_NUM\n` in its replyText for correct formatting.</p>
+                <label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & Style):</label>
+                <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({ autonomousBotSystemPrompt: e.target.value })} rows={4} className="mt-1 w-full p-2 input-style font-mono text-xs"/>
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Instructs Gemini on reply style. The bot will programmatically add `&gt;&gt;TARGET_POST_NUM\n` to replies.</p>
             </div>
              <div className="mt-3">
                 <label htmlFor="botReplyMode" className="block text-sm font-medium">Bot Reply Mode:</label>
