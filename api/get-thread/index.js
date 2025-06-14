@@ -1,3 +1,4 @@
+
 // api/get-thread/index.js
 import fetch from 'node-fetch';
 
@@ -10,7 +11,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent'); // Allow X-User-Agent
     return res.status(200).json({ message: 'CORS preflight successful for /api/get-thread' });
   }
 
@@ -20,6 +21,8 @@ export default async function handler(req, res) {
   }
 
   const { board, thread } = req.query;
+  const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS;
+
 
   if (!board || !thread) {
     console.warn(`${timestamp} [api/get-thread] Missing board or thread query parameters.`);
@@ -27,12 +30,12 @@ export default async function handler(req, res) {
   }
 
   const dvachUrl = `https://2ch.hk/${board}/res/${thread}.json`;
-  console.log(`${timestamp} [api/get-thread] Fetching from Dvach API: ${dvachUrl}`);
+  console.log(`${timestamp} [api/get-thread] Fetching from Dvach API: ${dvachUrl} with UA: ${clientUserAgent}`);
 
   try {
     const dvachResponse = await fetch(dvachUrl, {
       headers: {
-        'User-Agent': DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS,
+        'User-Agent': clientUserAgent, // Use client-provided or default UA
         'Accept': 'application/json',
       }
     });
@@ -41,21 +44,18 @@ export default async function handler(req, res) {
 
     if (!dvachResponse.ok) {
       console.error(`${timestamp} [api/get-thread] Error from Dvach API. Status: ${dvachResponse.status}. URL: ${dvachUrl}. Response: ${responseBodyText.substring(0, 500)}`);
-      // Try to parse error from Dvach if it's JSON
       try {
         const errorJson = JSON.parse(responseBodyText);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Content-Type', 'application/json');
         return res.status(dvachResponse.status).json(errorJson);
       } catch (e) {
-        // If Dvach error is not JSON, return plain text
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Content-Type', 'application/json'); // Still JSON for our error wrapper
+        res.setHeader('Content-Type', 'application/json'); 
         return res.status(dvachResponse.status).json({ error: { code: dvachResponse.status, message: `Dvach API error: ${responseBodyText.substring(0, 200)}` }});
       }
     }
     
-    // Assuming Dvach response is JSON if dvachResponse.ok
     let threadData;
     try {
         threadData = JSON.parse(responseBodyText);

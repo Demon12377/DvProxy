@@ -1,5 +1,6 @@
 
-import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK } from "@google/genai"; // GeminiChat renamed to GeminiChatInstanceType
+/// <reference types="vite/client" />
+import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK } from "@google/genai";
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -8,7 +9,7 @@ export interface DvachFile {
   path: string; // Relative path to file on server
   thumbnail: string; // Relative path to thumbnail
   md5?: string;
-  type: number; // FileType enum from API (0: none, 1: jpg, 2: png, 4: gif, 6: webm, 10: mp4 etc.)
+  type: number; // FileType enum from API (e.g., 1: jpg, 2: png, 6: webm)
   size: number; // Size in KB from API in spec, but often in bytes in practice. Be mindful.
   width: number;
   height: number;
@@ -24,31 +25,31 @@ export interface DvachFile {
 
 export interface DvachPost {
   num: string; // Post number, always treat as string
-  parent: string; // Thread number (OP post num), or "0" for OP itself, always treat as string
+  parent: string; // Thread OP number (for replies) or "0" for OP itself, always treat as string
   board?: string; // Board ID, useful when posts are out of thread context
   timestamp: number; // Unix timestamp
-  lasthit?: number; // Unix timestamp of last bump
+  lasthit?: number; // Unix timestamp of last bump for the thread (present on all posts in a thread response)
   date?: string; // Formatted date string from API
   email?: string; // mailto:sage or actual email
   subject?: string;
   comment: string; // HTML comment
   files?: DvachFile[];
-  views?: number;
+  views?: number; // For OP post in catalog/threads list
   sticky?: number; // 0 or 1+
-  closed?: number; // 0 or 1
-  banned?: number; // 0 or 1
-  op?: number; // 0 or 1 // 1 if this post is by the OP of the thread
+  closed?: number; // 0 or 1 (present on OP post if thread is closed)
+  banned?: number; // 0 or 1 (if poster was banned for this post)
+  op?: number; // 0 or 1 (1 if this post is by the OP of the thread)
   name?: string; // Poster name
   trip?: string;
   trip_style?: string; // For admin/mod trips
   icon?: string; // HTML string for flag/icon
-  tags?: string; // Comma-separated or single tag
-  likes?: number;
-  dislikes?: number;
-  posts_count?: number; // For OP post in catalog/threads list
+  tags?: string; // Comma-separated or single tag (usually on OP post)
+  likes?: number; // If likes enabled
+  dislikes?: number; // If likes enabled
+  posts_count?: number; // For OP post in catalog/threads list (number of replies)
   files_count?: number; // For OP post in catalog/threads list
-  score?: number; // For threads.json
-  number?: number; // For posts within a thread response, usually indicates order.
+  score?: number; // For threads.json (not used here)
+  number?: number; // For posts within a thread response, usually indicates order (makaba.md specific)
 }
 
 // Response for /{board}/res/{thread_id}.json
@@ -80,7 +81,7 @@ export interface DvachThreadResponse {
 }
 
 // For API responses from /api/dvach-post and /api/dvach-login
-export interface DvachPostApiResponse { // Also used for login response structure where applicable
+export interface DvachPostApiResponse { 
   result: number; // 0 for error, 1 for success (can also be 2 for passcode already active)
   reason?: string; // Error message from Dvach (makaba.md style)
   Error?: string; // Alternative error message (makaba.md style, less common now)
@@ -114,10 +115,10 @@ export interface SentMessageInfo {
   parent?: string; // Post number this message replied to, if any
   file_info?: { name: string; size: number; hash?: string }; // Info about attached file
   isGeminiPost?: boolean;
-  geminiTriggerPostNum?: string; // If Gemini replied to a specific post OR if this is the bot's initial seed post in "replies_to_bot" mode.
-  geminiGeneratedImage?: boolean; // If Gemini generated an image for this post
-  geminiConversationId?: string; // To link to a specific GeminiDvachConversation
-  isBotSeedPost?: boolean; // True if this is the bot's initial post in 'replies_to_bot' mode for a thread
+  geminiTriggerPostNum?: string; 
+  geminiGeneratedImage?: boolean; 
+  geminiConversationId?: string; 
+  isBotSeedPost?: boolean; 
 }
 
 export type ProxyModeForGET =
@@ -136,12 +137,12 @@ export interface DvachSessionCookies {
 
 export type AutonomousBotReplyMode = 
   | 'replies_to_bot' 
-  | 'random_in_thread'
-  | 'replies_to_bot_initial_post'; // Internal state for bot making its first post in 'replies_to_bot' mode
+  | 'random_in_thread';
+  // | 'replies_to_bot_initial_post'; // Removed as it was internal state
 
 export interface AppSettings {
-  board: string; // Default board for manual operations tab
-  threadId: string; // Default thread ID for manual operations tab
+  board: string; 
+  threadId: string; 
   purchasedPasscode: string; 
 
   geminiApiKeySource: 'env' | 'user';
@@ -149,48 +150,51 @@ export interface AppSettings {
 
   theme: 'light' | 'dark' | 'system';
 
-  proxyModeForGET: ProxyModeForGET; 
+  proxyModeForGET: ProxyModeForGET; // For thread data, etc.
   customProxyUrlForGET: string;    
   
-  proxyModeForImagesGET: ProxyModeForGET; 
+  proxyModeForImagesGET: ProxyModeForGET; // Specifically for fetching images/media
   customProxyUrlForImagesGET: string;   
   
   userAgent: string; 
 
-  geminiAnalyzeOpMedia: boolean; 
-  geminiAnalyzeAnonMedia: boolean; 
-  geminiReplyWithGeneratedImage: boolean;
-  maxImagesToAnalyzePerPost: number;
-  analyzeVideosInTriggerPosts: boolean; 
-
+  // Manual Gemini Reply settings
+  geminiAnalyzeOpMedia: boolean; // For manual reply: analyze OP post media
+  geminiAnalyzeAnonMedia: boolean; // For manual reply: analyze non-OP post media
+  
+  // Global Gemini interaction settings
+  geminiReplyWithGeneratedImage: boolean; // Applies to both manual and bot replies
+  maxImagesToAnalyzePerPost: number; // Applies to both manual and bot
+  analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
 
   // Autonomous Bot specific settings
-  autonomousBotTargetBoard: string; // Specific target board for the bot
-  autonomousBotTargetThreadId: string; // Specific target thread for the bot
+  autonomousBotTargetBoard: string; 
+  autonomousBotTargetThreadId: string; 
   autonomousBotSystemPrompt: string; 
-  botAnalyzesImagesInTriggerPosts: boolean; 
-  autonomousBotReplyMode: Omit<AutonomousBotReplyMode, 'replies_to_bot_initial_post'>; // User selects 'replies_to_bot' or 'random_in_thread'
+  botAnalyzesImagesInTriggerPosts: boolean; // Bot: analyze media in the post it's replying to
+  autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number; 
+  autonomousBotAllowReplyToSelf: boolean; // New setting
 
-  // Gemini Model Configuration (Mainly for manual replies now, bot uses its own system prompt)
-  geminiSystemInstruction: string; 
+  // Gemini Model Configuration (Mainly for manual replies, bot might use simplified settings or system prompt dictates)
+  geminiSystemInstruction: string; // For manual replies primarily
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
   geminiMaxOutputTokens: number;
   geminiResponseMimeType: 'text/plain' | 'application/json'; 
-  useSearchGrounding: boolean; 
+  useSearchGrounding: boolean; // For manual testing, bot usually won't use this.
   useThinkingBudget: boolean; 
   geminiThinkingBudget: number;
 
 
-  // Repetitive Posting Mode (Advanced/Botting Feature) 
+  // Repetitive Posting Mode (Advanced/Botting Feature) - Kept from original, might be unused
   enableRepetitivePostingMode: boolean;
   repetitivePostMessage: string;
   repetitivePostCount: number; 
   repetitivePostDelay: number; 
 
-  // Pre-filled Posting Mode (Advanced/Botting Feature) 
+  // Pre-filled Posting Mode (Advanced/Botting Feature) - Kept from original, might be unused
   enablePrefilledPostingMode: boolean;
   prefilledPostMessages: string; 
   prefilledPostTargets: string; 
@@ -225,23 +229,24 @@ export interface GeminiDvachConversation {
   id: string; 
   board: string;
   threadId: string;
-  triggerPostNum: string; // The post that initiated this specific interaction chain OR the bot's own seed post.
+  triggerPostNum: string; 
   botSystemPromptUsed: string; 
-  geminiChatInstance?: GeminiChat; 
+  geminiChatInstance?: GeminiChat; // Store initialized chat for conversational mode
   history: ChatMessage[]; 
   lastCheckedTimestamp: number; 
-  lastBotReplyNum?: string; // The most recent reply made by the bot in this conversation
-  participatingPostNumbers: string[]; // All post numbers involved in this direct convo (trigger, replies to it, bot's replies)
-  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded'; 
+  lastBotReplyNum?: string; 
+  participatingPostNumbers: string[]; 
+  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded' | 'context_built'; 
   initialContext?: { 
     opPostText?: string;
-    opPostImagePreview?: string; 
-    precedingPostsText?: string[];
-    targetPostText: string; // Text of the triggerPostNum
-    targetPostImagePreview?: string; 
+    opPostImagePreviews?: string[]; // Multiple previews if OP has multiple images
+    opPostMediaParts?: Part[]; // Cached media parts for OP
+    precedingPostsText?: string[]; // Text of posts right before the trigger
+    targetPostText?: string; // Text of the triggerPostNum itself (if not OP)
+    targetPostImagePreviews?: string[]; // If target post has images
   };
-  isBotSeedConversation?: boolean; // True if this conversation was initiated by the bot's own post in 'replies_to_bot' mode
-  initialBotPostNum?: string; // If isBotSeedConversation, this is the num of the bot's first post in the thread.
+  isBotSeedConversation?: boolean; 
+  initialBotPostNum?: string; 
 }
 
 // Types related to Gemini Grounding (for CustomGenerateContentResponse)
@@ -265,4 +270,11 @@ type SDKCandidate = NonNullable<GeminiGenerateContentResponseSDK['candidates']>[
 
 export interface CustomGenerateContentResponse extends GeminiGenerateContentResponseSDK {
   candidates?: (SDKCandidate & { groundingMetadata?: GroundingMetadata })[];
+}
+
+export interface BotOpMediaCache {
+  threadId: string;
+  opPostNum: string;
+  mediaParts: Part[];
+  mediaContextText: string; // A textual description of the media for prompts
 }

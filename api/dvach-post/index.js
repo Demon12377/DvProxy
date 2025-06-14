@@ -1,3 +1,4 @@
+
 // api/dvach-post/index.js
 import formidable from 'formidable';
 import fs from 'fs';
@@ -45,7 +46,7 @@ export default async function handler(req, res) {
       });
     });
     
-    console.log(`${timestamp} [api/dvach-post] Parsed client fields (excluding file data):`, JSON.stringify(Object.fromEntries(Object.entries(fields).map(([k,v]) => [k, Array.isArray(v) && v.length === 1 ? v[0] : v])), null, 2));
+    // console.log(`${timestamp} [api/dvach-post] Parsed client fields (excluding file data):`, JSON.stringify(Object.fromEntries(Object.entries(fields).map(([k,v]) => [k, Array.isArray(v) && v.length === 1 ? v[0] : v])), null, 2));
 
     const getFieldValue = (fieldName) => {
       const value = fields[fieldName];
@@ -53,8 +54,10 @@ export default async function handler(req, res) {
     };
 
     const board = getFieldValue('board');
-    const clientThreadId = getFieldValue('thread_id_for_dvach'); // This comes from the client
-    const clientParentNum = getFieldValue('parent_num_for_dvach'); // This comes from the client
+    // This is the overall thread context (OP post number), or "0" if client intends to make a new thread.
+    const clientContextThreadId = getFieldValue('thread_id_for_dvach'); 
+    // This is the specific post number being replied to, if any.
+    const clientReplyToParentNum = getFieldValue('parent_num_for_dvach'); 
     const comment = getFieldValue('comment');
     const passcodeAuthCookieValue = getFieldValue('passcode_auth_cookie_value');
     const userCodeCookieValue = getFieldValue('user_code_cookie_value'); // Optional
@@ -72,57 +75,67 @@ export default async function handler(req, res) {
       return res.status(400).json({ result: 0, error: { code: -2002, message: `Missing required fields for posting. Details: ${missingInfo}` } });
     }
     
-    console.log(`${timestamp} [api/dvach-post] Using provided session cookies to post to Dvach /user/posting...`);
+    console.log(`${timestamp} [api/dvach-post] Using provided session cookies to post to Dvach /user/posting... UA: ${clientUserAgent}`);
     const dvachPostFormData = new FormDataNode();
     dvachPostFormData.append('board', board);
     
-    // Determine the 'thread' value for Dvach API
-    // If clientThreadId is "0" or empty, it's a new thread, so Dvach expects "0".
-    // Otherwise, use the clientThreadId (which is the OP post number of the thread context).
-    const dvachThreadValue = (!clientThreadId || clientThreadId === "0") ? "0" : clientThreadId;
-    dvachPostFormData.append('thread', dvachThreadValue);
-     console.log(`${timestamp} [api/dvach-post] Dvach 'thread' field set to: ${dvachThreadValue}`);
+    // Dvach API field 'thread': OP post number of the thread, or "0" for a new thread.
+    // clientContextThreadId comes from the client, representing this.
+    const dvachApiThreadField = (!clientContextThreadId || clientContextThreadId === "0") ? "0" : clientContextThreadId;
+    dvachPostFormData.append('thread', dvachApiThreadField);
+    console.log(`${timestamp} [api/dvach-post] Dvach API 'thread' field set to: ${dvachApiThreadField}`);
 
-    // If clientParentNum is provided, it means this is a reply to a specific post within the thread.
-    // Dvach's 'parent' field takes this specific post number for replies.
-    // If it's a new thread post (dvachThreadValue is "0"), 'parent' is not usually sent or is "0".
-    // If it's a post to an existing thread but not a direct reply to a specific comment (e.g. just a general post in thread), 'parent' would be the thread OP number (clientThreadId).
-    // The current client logic in App.tsx sends `replyToPostNum` which becomes `parent_num_for_dvach` here.
-    // If `parent_num_for_dvach` is present, it's a direct reply.
-    if (clientParentNum) {
-      dvachPostFormData.append('parent', clientParentNum);
-      console.log(`${timestamp} [api/dvach-post] Dvach 'parent' field (reply to specific post) set to: ${clientParentNum}`);
+    // Dvach API field 'parent': Specific post number being replied to.
+    // clientReplyToParentNum comes from the client, representing this.
+    // If clientReplyToParentNum is not provided, it's either a new thread or a general post in an existing thread (not a direct reply).
+    // In these cases, 'parent' might not be needed or could be "0" or the thread OP num.
+    // makaba.md suggests 'parent' holds the thread_id for non-OP posts.
+    // For direct replies, this should be the specific post.
+    if (clientReplyToParentNum) {
+      dvachPostFormData.append('parent', clientReplyToParentNum);
+      console.log(`${timestamp} [api/dvach-post] Dvach API 'parent' (reply to specific post) field set to: ${clientReplyToParentNum}`);
+    } else if (dvachApiThreadField !== "0") {
+      // If posting to an existing thread (dvachApiThreadField is OP num) but not a direct reply to a specific post,
+      // Dvach might expect 'parent' to be the thread OP num.
+      // Or it might not be needed if 'thread' is already set to OP num.
+      // For safety, if it's not a new thread and not a direct reply, let's also set parent to the thread OP num.
+      // This aligns with makaba.md's "parent: ID треда данного поста ... 0 для первого поста треда".
+      // dvachPostFormData.append('parent', dvachApiThreadField);
+      // console.log(`${timestamp} [api/dvach-post] Dvach API 'parent' (general post in thread) field set to: ${dvachApiThreadField}`);
+      // Re-evaluating: if not a direct reply, `parent` field might not be strictly necessary if `thread` is already the OP.
+      // Let's only set `parent` if `clientReplyToParentNum` is explicitly provided.
+      // If it's a general post in a thread, `thread` field (set to OP) should be enough.
     }
     
     dvachPostFormData.append('comment', comment);
-    dvachPostFormData.append('captcha_type', 'passcode'); // Still 'passcode' as we are using a passcode-derived session
+    dvachPostFormData.append('captcha_type', 'passcode'); 
 
     if (emailSage) { 
       dvachPostFormData.append('email', emailSage); 
     }
     
-    const fileEntryArray = files.file; // Assuming 'file' is the field name from client
+    const fileEntryArray = files.file; 
     let actualFileAttached = false;
     if (fileEntryArray && fileEntryArray.length > 0) {
       const file = fileEntryArray[0];
       if (file && file.filepath && file.size > 0) {
         dvachPostFormData.append('file[]', fs.createReadStream(file.filepath), { 
-          filename: file.originalFilename || 'upload.tmp', // Use original filename if available
-          contentType: file.mimetype || 'application/octet-stream', // Use mimetype if available
+          filename: file.originalFilename || 'upload.tmp', 
+          contentType: file.mimetype || 'application/octet-stream', 
         });
         actualFileAttached = true;
         console.log(`${timestamp} [api/dvach-post] Actual file attached to Dvach request: ${file.originalFilename}`);
       }
     }
 
-    if (!actualFileAttached) {
-      // If no file, Dvach might require a 'dummy' file field or just works without.
-      // The Python script sends a dummy field if no file. Let's replicate.
-      console.log(`${timestamp} [api/dvach-post] No actual file attached by client. Sending 'dummy' field to Dvach.`);
-      dvachPostFormData.append('dummy', 'dummy content', { filename: '', contentType: 'text/plain' });
-    }
-    
-    const dvachPostUrl = `${DVACH_BASE_URL}/user/posting`;
+    // Makaba seems to require a file field even if empty, or it can error.
+    // If no actual file, some clients send an empty 'file[]' or a dummy.
+    // For simplicity, if no file is attached, we won't add any 'file[]' or 'dummy' field.
+    // Dvach should handle empty file submissions correctly if the board allows text-only posts,
+    // or if it's a reply where files are optional.
+    // If a board requires a file for OPs, and `dvachApiThreadField` is "0" and no file, Dvach will error (-19).
+
+    const dvachPostUrl = `${DVACH_BASE_URL}/user/posting?nc=1`; // nc=1 is often used
     
     let cookieHeader = `passcode_auth=${passcodeAuthCookieValue}`;
     if (userCodeCookieValue) {
@@ -130,11 +143,13 @@ export default async function handler(req, res) {
     }
 
     const dvachPostRequestHeaders = {
-      ...dvachPostFormData.getHeaders(), // Necessary for multipart/form-data boundary
+      ...dvachPostFormData.getHeaders(), 
       'Cookie': cookieHeader, 
       'Accept': 'application/json',
-      'User-Agent': clientUserAgent, // Use User-Agent from client
+      'User-Agent': clientUserAgent,
     };
+    
+    console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach: ${dvachPostUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);
 
     let dvachPostResponse;
     try {
@@ -150,7 +165,7 @@ export default async function handler(req, res) {
 
     const dvachPostResponseText = await dvachPostResponse.text();
     console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response status: ${dvachPostResponse.status}`);
-    console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response text (first 500 chars): ${dvachPostResponseText.substring(0, 500)}`);
+    // console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response text (first 500 chars): ${dvachPostResponseText.substring(0, 500)}`);
 
     res.setHeader('Content-Type', 'application/json');
     
@@ -159,15 +174,12 @@ export default async function handler(req, res) {
       dvachPostJson = JSON.parse(dvachPostResponseText);
     } catch (e) {
       console.warn(`${timestamp} [api/dvach-post] Dvach /user/posting response not valid JSON. Status: ${dvachPostResponse.status}. Text: ${dvachPostResponseText.substring(0,200)}`);
-      // If Dvach gives a non-JSON success (e.g., HTML page on some weird success/redirect), but status is OK
       if (!dvachPostResponse.ok) {
         return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach (non-JSON), status ${dvachPostResponse.status}` } });
       }
-      // If status is OK but not JSON, it's ambiguous.
-      return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach, but response was not valid JSON. Check Dvach manually.", rawResponse: dvachPostResponseText.substring(0,200) });
+      return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach, but response was not valid JSON. Check Dvach manually.", rawResponsePreview: dvachPostResponseText.substring(0,200) });
     }
 
-    // Forward Dvach's status and JSON response to the client
     return res.status(dvachPostResponse.status).json(dvachPostJson);
 
   } catch (error) {
