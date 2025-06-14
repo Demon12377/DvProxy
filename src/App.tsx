@@ -1660,7 +1660,7 @@ useEffect(() => {
 
       <footer className="text-center py-4 border-t border-gray-200 dark:border-gray-700 mt-8">
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          Dvach Gemini Bot Interface - Version {APP_VERSION} - Use responsibly.
+          Dvach Gemini Bot Interface - Version ${APP_VERSION} - Use responsibly.
         </p>
       </footer>
     </div>
