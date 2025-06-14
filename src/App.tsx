@@ -204,6 +204,7 @@ const App: React.FC = () => {
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [ai, setAi] = useState<GoogleGenAI | null>(null);
+  const currentAiApiKeyRef = useRef<string | null>(null); // Ref to store the key used for the current AI instance
   const [activeTab, setActiveTab] = useState<'dvach' | 'bot_control' | 'settings' | 'logs'>('dvach');
   
   const [dvachSessionCookies, setDvachSessionCookies] = useState<DvachSessionCookies | null>(() => {
@@ -304,31 +305,46 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const keyToUse = settings.geminiApiKeySource === 'env' ? processEnvApiKey : settings.userGeminiApiKey;
+
     if (keyToUse) {
+      if (ai && currentAiApiKeyRef.current === keyToUse) {
+        // Already initialized with the same key, do nothing.
+        return;
+      }
+
+      addLog('Attempting to initialize Gemini API client...', 'system');
       try {
-        if (!ai || (ai as any)._apiKey !== keyToUse) { // Condition to actually re-initialize
-          const genAI = new GoogleGenAI({ apiKey: keyToUse });
-          setAi(genAI);
-          addLog('Gemini API client (re)initialized.', 'success'); 
-          if (!initBotJsonInfoLoggedRef.current) { 
-             addLog("Note on Bot's JSON: Bot uses Gemini's native JSON output. Client code prefixes '>>POST_NUMBER'.", 'system');
-             initBotJsonInfoLoggedRef.current = true;
-          }
+        const genAI = new GoogleGenAI({ apiKey: keyToUse });
+        setAi(genAI);
+        currentAiApiKeyRef.current = keyToUse;
+        addLog('Gemini API client initialized successfully.', 'success');
+
+        if (!initBotJsonInfoLoggedRef.current) {
+           addLog("Note on Bot's JSON: Bot uses Gemini's native JSON output. Client code prefixes '>>POST_NUMBER'.", 'system');
+           initBotJsonInfoLoggedRef.current = true;
         }
-        // No log here if AI is already initialized and key is current, prevents spamming "initialized successfully"
       } catch (error) {
         addLog(`Failed to initialize Gemini API: ${(error as Error).message}. Check API Key format/validity.`, 'error', error);
         setAi(null);
+        currentAiApiKeyRef.current = null;
       }
     } else {
-      setAi(null); // Clear AI instance if no key
-      if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) {
-        addLog('Gemini API key (Manual) is not set. Gemini features disabled.', 'warning');
-      } else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) {
-        addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected. Gemini features disabled.', 'warning');
+      if (ai) { // If AI was previously set, now clear it
+        setAi(null);
+        currentAiApiKeyRef.current = null;
+        addLog('Gemini API client de-initialized (no API key).', 'warning');
+      }
+      // Only log these warnings if we aren't already de-initializing from a previously valid key state
+      if (currentAiApiKeyRef.current !== null || !ai) { 
+          if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) {
+            addLog('Gemini API key (Manual) is not set. Gemini features disabled.', 'warning');
+          } else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) {
+            addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected. Gemini features disabled.', 'warning');
+          }
       }
     }
-  }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey, ai, addLog]);
+  }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey, addLog]); // `ai` removed from deps
+
 
   const handleUpdateSettings = (newSettings: Partial<AppSettings>) => {
     setSettings(prev => ({ ...prev, ...newSettings }));
@@ -1018,8 +1034,7 @@ useEffect(() => {
         }
         addLog("Интервал автономного бота остановлен (из-за useEffect cleanup).", "bot_setup");
     };
-// eslint-disable-next-line react-hooks/exhaustive-deps
-}, [autonomousBotActive, ai, dvachSessionCookies, settings.autonomousBotTargetBoard, settings.autonomousBotTargetThreadId, settings.autonomousBotReplyMode, settings.autonomousBotCycleIntervalSeconds]); // Add other relevant settings if they should trigger a restart/re-config of the bot
+}, [autonomousBotActive, ai, dvachSessionCookies, settings.autonomousBotTargetBoard, settings.autonomousBotTargetThreadId, settings.autonomousBotReplyMode, settings.autonomousBotCycleIntervalSeconds, addLog, settings.proxyModeForGET, settings.customProxyUrlForGET, settings.userAgent, settings.geminiAnalyzeOpMedia, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET, settings.maxImagesToAnalyzePerPost, settings.autonomousBotSystemPrompt, settings.botAnalyzesImagesInTriggerPosts, settings.useThinkingBudget, settings.geminiThinkingBudget, geminiDvachConversations, sentMessages]);
   
   const toggleTheme = () => {
     const newTheme = settings.theme === 'light' ? 'dark' : settings.theme === 'dark' ? 'system' : 'light';
