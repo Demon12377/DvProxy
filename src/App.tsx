@@ -1,3 +1,4 @@
+
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleGenAI, Part } from "@google/genai"; 
@@ -791,7 +792,7 @@ useEffect(() => {
                     threadId: currentBotSettings.autonomousBotTargetThreadId,
                     triggerPostNum: opPost?.num || currentBotSettings.autonomousBotTargetThreadId, // OP is initial trigger
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
-                    history: [{ role: 'system', parts: [{text: `Initial context for thread /${currentBotSettings.autonomousBotTargetBoard}/${currentBotSettings.autonomousBotTargetThreadId}. OP Post (>>${opPost?.num || 'N/A'}): ${opPostText}`}], timestamp: Date.now() }],
+                    history: [{ role: 'system', parts: [{text: `Initial context for thread /${currentBotSettings.autonomousBotTargetBoard}/${currentBotSettings.autonomousBotTargetThreadId}. OP Post (>>${opPost?.num || 'N/A'}): ${opPostText}`}], timestamp: Date.now(), id: `system-init-${Date.now()}` }],
                     lastCheckedTimestamp: Date.now(),
                     participatingPostNumbers: [opPost?.num || currentBotSettings.autonomousBotTargetThreadId],
                     status: 'context_built',
@@ -1036,12 +1037,15 @@ useEffect(() => {
 
      const isGeminiReplyToThis = sentMessages.some(m => m.geminiTriggerPostNum === post.num && m.isGeminiPost);
     
-     const cardBg = isMyPost ? 
-        (isGeminiPostByBot ? "bg-purple-50 dark:bg-purple-900/50" : "bg-blue-50 dark:bg-blue-900/50") : 
-        "bg-gray-50 dark:bg-gray-700";
-     const borderColor = isMyPost ?
-        (isGeminiPostByBot ? "border-purple-300 dark:border-purple-700" : "border-blue-300 dark:border-blue-700") :
-        "border-gray-200 dark:border-gray-600";
+     const cardBg = isMyPost
+       ? (isGeminiPostByBot ? "bg-purple-50 dark:bg-purple-900/50" : "bg-blue-50 dark:bg-blue-900/50")
+       : "bg-gray-50 dark:bg-gray-700";
+
+     const borderColor = isMyPost
+       ? (isGeminiPostByBot
+         ? "border-purple-300 dark:border-purple-700"
+         : "border-blue-300 dark:border-blue-700")
+       : "border-gray-200 dark:border-gray-600";
 
     return (
     <div 
