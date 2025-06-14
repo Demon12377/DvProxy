@@ -348,10 +348,10 @@ const App: React.FC = () => {
     const keyToUse = settings.geminiApiKeySource === 'env' ? processEnvApiKey : settings.userGeminiApiKey;
     if (keyToUse) {
       try {
-        const genAI = new GoogleGenAI({ apiKey: keyToUse });
-        setAi(genAI);
-        const prevApiKey = (ai as any)?._apiKey; 
-        if (!prevApiKey || prevApiKey !== keyToUse) {
+        // Only create new instance if key or source actually changes, or if ai is null
+        if (!ai || (ai as any)._apiKey !== keyToUse) {
+            const genAI = new GoogleGenAI({ apiKey: keyToUse });
+            setAi(genAI);
             addLog('Gemini API initialized successfully.', 'success');
             if (!initBotJsonInfoLoggedRef.current) {
                  addLog("Note on Bot's JSON Generation: The autonomous bot uses Gemini's native JSON output (responseSchema) for structure. The bot's system prompt guides reply *content and style* only. Client-side code prepends '>>POST_NUMBER'.", 'system');
@@ -364,13 +364,11 @@ const App: React.FC = () => {
       }
     } else {
       setAi(null);
-      if (activeTab === 'bot_control' || activeTab === 'dvach') { 
-        if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) addLog('Gemini API key (Manual) is not set.', 'warning');
-        else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected or accessible.', 'warning');
-      }
+      // Log warning only if API key is expected but not found
+      if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) addLog('Gemini API key (Manual) is not set.', 'warning');
+      else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected or accessible.', 'warning');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey, addLog, activeTab]);
+  }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey, ai, addLog]);
 
   const handleUpdateSettings = (newSettings: Partial<AppSettings>) => {
     setSettings(prev => ({ ...prev, ...newSettings }));
@@ -784,13 +782,13 @@ useEffect(() => {
                 addAutonomousBotActivityLog(`Создание нового контекста беседы для треда ${currentBotTargetKeyForCycle}.`, 'bot_setup');
                 initialOpTextForConvo = opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A";
                 const systemMessageText = `Initial context for thread /${botBoard}/${botThreadId}. OP Post (>>${opPost?.num || 'N/A'}): ${initialOpTextForConvo}`;
-                initialContextParts.push({text: systemMessageText});
+                // initialContextParts.push({text: systemMessageText}); // System messages go to systemInstruction
 
                 currentConversation = {
                     id: currentBotTargetKeyForCycle, board: botBoard, threadId: botThreadId,
                     triggerPostNum: opPost?.num || botThreadId, 
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
-                    history: [{ role: 'system', parts: initialContextParts, timestamp: Date.now(), id: `system-init-${Date.now()}` }],
+                    history: [{ role: 'system', parts: [{text: systemMessageText}], timestamp: Date.now(), id: `system-init-${Date.now()}` }], // Keep system message for display/logic
                     lastCheckedTimestamp: Date.now(), participatingPostNumbers: [opPost?.num || botThreadId],
                     status: 'context_built',
                     initialContext: { opPostText: initialOpTextForConvo, opPostMediaParts: [], precedingPostsText: [] }
@@ -888,12 +886,15 @@ useEffect(() => {
                     addAutonomousBotActivityLog(`Бот выбрал случайный пост >>${targetPost.num} для ответа.`, 'bot_activity');
                     setAutonomousBotStatus(`Генерация ответа на >>${targetPost.num}...`);
 
-                    const geminiCallHistory = [...currentConversation.history];
+                    let geminiCallContents = currentConversation.history
+                        .filter(msg => msg.role === 'user' || msg.role === 'model') // Only user/model for contents
+                        .map(msg => ({ role: msg.role, parts: msg.parts }));
+                    
                     let promptForTargetPost = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
+                    const targetImageParts: Part[] = [];
 
                     if (currentBotSettings.botAnalyzesImagesInTriggerPosts && targetPost.files && targetPost.files.length > 0) {
                         const imagesInTarget = targetPost.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, currentBotSettings.maxImagesToAnalyzePerPost);
-                        const targetImageParts: Part[] = [];
                         for (const file of imagesInTarget) {
                              try {
                                 const imageUrl = `${DVACH_DOMAINS[0]}${file.path}`;
@@ -913,17 +914,22 @@ useEffect(() => {
                                 addAutonomousBotActivityLog(`Ошибка загрузки изображения ${file.name} из поста >>${targetPost.num}: ${(e as Error).message}`, 'bot_warning');
                             }
                         }
-                        if (targetImageParts.length > 0) {
-                           geminiCallHistory.push({ id: `img-context-${targetPost.num}`, role: 'user', parts: targetImageParts, timestamp: Date.now() });
-                        }
                     }
-                    geminiCallHistory.push({ id: `prompt-${targetPost.num}`, role: 'user', parts: [{ text: promptForTargetPost + `\nСгенерируй свой ответ.` }], timestamp: Date.now() });
                     
+                    // Add the specific prompt for the target post as the last user message.
+                    // Combine text and image parts if any for the target post.
+                    const finalUserMessageParts: Part[] = [...targetImageParts, { text: promptForTargetPost + `\nСгенерируй свой ответ.` }];
+                    geminiCallContents.push({ role: 'user', parts: finalUserMessageParts });
+                    
+                    // Extract system instruction from the history if present
+                    const systemMessageFromHistory = currentConversation.history.find(msg => msg.role === 'system');
+                    const effectiveSystemInstruction = systemMessageFromHistory?.parts[0]?.text || currentBotSettings.autonomousBotSystemPrompt;
+
                     const geminiApiResponse = await ai.models.generateContent({
                         model: GEMINI_TEXT_MODEL,
-                        contents: geminiCallHistory,
+                        contents: geminiCallContents, // Contains only user/model roles now
                         config: {
-                            systemInstruction: currentBotSettings.autonomousBotSystemPrompt,
+                            systemInstruction: effectiveSystemInstruction, // Use extracted or default
                             temperature: 0.85, topK: 50, topP: 0.95, 
                             maxOutputTokens: AUTONOMOUS_BOT_GEMINI_MAX_OUTPUT_TOKENS,
                             responseMimeType: "application/json", 
