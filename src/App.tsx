@@ -693,7 +693,7 @@ const runBotCycleCallback = useCallback(async () => {
     setAutonomousBotStatus(`Active - Running cycle for /${botBoard}/${botThreadId}...`);
     addAutonomousBotActivityLog(`Starting bot cycle. Mode: ${currentBotSettings.autonomousBotReplyMode}. Target: /${botBoard}/${botThreadId}`, 'bot_activity');
 
-    let convoForThisCycle: GeminiDvachConversation | undefined = undefined;
+    let workingConvo: GeminiDvachConversation | undefined = undefined;
     const existingConversation = geminiDvachConversations.get(currentBotTargetKeyForCycle);
 
     try {
@@ -706,7 +706,7 @@ const runBotCycleCallback = useCallback(async () => {
             addAutonomousBotActivityLog("No posts found or error loading thread for bot cycle.", 'bot_warning');
             setAutonomousBotStatus("Error loading thread data for bot.");
             if (existingConversation) {
-                convoForThisCycle = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
+                workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
             }
         } else {
             const allPostsInThread = threadPostsResponse.threads[0].posts;
@@ -770,7 +770,7 @@ const runBotCycleCallback = useCallback(async () => {
             if (!existingConversation || existingConversation.status === 'archived' || existingConversation.board !== botBoard || existingConversation.threadId !== botThreadId) {
                 addAutonomousBotActivityLog(`Creating new conversation context for ${currentBotTargetKeyForCycle}. Scope: ${currentBotSettings.autonomousBotInitialContextScope}`, 'bot_setup');
                 const initialHistoryMessageParts: Part[] = [...opMediaPartsForInitialContext, { text: initialContextTextForSystemMessage }];
-                convoForThisCycle = {
+                workingConvo = {
                     id: currentBotTargetKeyForCycle, board: botBoard, threadId: botThreadId,
                     triggerPostNum: opPost?.num || botThreadId, 
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
@@ -780,17 +780,17 @@ const runBotCycleCallback = useCallback(async () => {
                     initialContext: { opPostNum: opPost?.num, opPostText: initialContextTextForSystemMessage, opPostMediaParts: opMediaPartsForInitialContext }
                 };
             } else {
-                 convoForThisCycle = JSON.parse(JSON.stringify(existingConversation)); 
-                 let updatedHistory = [...convoForThisCycle.history];
+                 workingConvo = JSON.parse(JSON.stringify(existingConversation)); 
+                 let updatedHistory = [...workingConvo.history];
                  const knownPostNumbersInHistoryOrProcessed = new Set([
                     ...updatedHistory.filter(msg => msg.role === 'user' && msg.id.startsWith("user-dvach-")).map(msg => msg.id.replace("user-dvach-","")),
                     ...updatedHistory.filter(msg => msg.role === 'model' && msg.id.startsWith("model-reply-to-")).map(msg => msg.id.replace("model-reply-to-","")),
                     ...updatedHistory.filter(msg => msg.id.startsWith("bot-")).map(msg => msg.id.replace('bot-','')),
-                    ...convoForThisCycle.participatingPostNumbers
+                    ...workingConvo.participatingPostNumbers
                  ]);
                  
                  const newPostsFromThread = allPostsInThread.filter(p => 
-                    p.timestamp * 1000 > convoForThisCycle!.lastCheckedTimestamp && 
+                    p.timestamp * 1000 > workingConvo!.lastCheckedTimestamp && 
                     !knownPostNumbersInHistoryOrProcessed.has(p.num) &&
                     (!sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId) || currentBotSettings.autonomousBotAllowReplyToSelf)
                 );
@@ -800,7 +800,7 @@ const runBotCycleCallback = useCallback(async () => {
                     newPostsFromThread.forEach(p => {
                         const postContentForHistory = `Post >>${p.num} (by ${p.name || 'Anon'} at ${new Date(p.timestamp * 1000).toLocaleTimeString()}): "${p.comment.replace(/<[^>]+>/g, '').substring(0,300)}"`;
                         updatedHistory.push({id: `user-dvach-${p.num}`, role: 'user', parts: [{text: postContentForHistory}], timestamp: p.timestamp * 1000 });
-                        if(!convoForThisCycle!.participatingPostNumbers.includes(p.num)) convoForThisCycle!.participatingPostNumbers.push(p.num);
+                        if(!workingConvo!.participatingPostNumbers.includes(p.num)) workingConvo!.participatingPostNumbers.push(p.num);
                     });
                     if (updatedHistory.length > 50) { 
                         const contextSetupMessage = updatedHistory.find(msg => msg.id.startsWith("context-setup-"));
@@ -808,21 +808,21 @@ const runBotCycleCallback = useCallback(async () => {
                         updatedHistory = contextSetupMessage ? [contextSetupMessage, ...otherMessages.slice(-49)] : otherMessages.slice(-50);
                     }
                  }
-                 convoForThisCycle.history = updatedHistory;
-                 if (convoForThisCycle.initialContext) {
-                    convoForThisCycle.initialContext.opPostMediaParts = opMediaPartsForInitialContext;
+                 workingConvo.history = updatedHistory;
+                 if (workingConvo.initialContext) {
+                    workingConvo.initialContext.opPostMediaParts = opMediaPartsForInitialContext;
                  }
             }
         }
     } catch (err) {
         addAutonomousBotActivityLog(`Error fetching thread data for bot: ${(err as Error).message}`, 'bot_error', err);
         if (existingConversation) {
-            convoForThisCycle = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
+            workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
         }
     }
 
-    if (!convoForThisCycle) {
-        addAutonomousBotActivityLog("CRITICAL: Bot conversation context is null/undefined before main action block. Cycle ending.", 'bot_error');
+    if (!workingConvo) {
+        addAutonomousBotActivityLog("CRITICAL: Bot conversation context is null/undefined or thread fetch failed. Cycle ending.", 'bot_error');
         setAutonomousBotStatus("Error: Bot context issue / Thread fetch failed critically.");
         if (existingConversation && existingConversation.status !== 'error') {
              const erroredConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' as const };
@@ -831,7 +831,7 @@ const runBotCycleCallback = useCallback(async () => {
         return; 
     }
     
-    // From this point, convoForThisCycle is guaranteed to be GeminiDvachConversation
+    let activeConversationForCycle: GeminiDvachConversation = workingConvo;
 
     if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
         setAutonomousBotStatus("Mode 'random_in_thread': Finding target...");
@@ -846,7 +846,7 @@ const runBotCycleCallback = useCallback(async () => {
             p.num !== opPostNumInBotLogic && 
             (!botPostNumbers.has(p.num) || currentBotSettings.autonomousBotAllowReplyToSelf) && 
             !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) &&
-            !convoForThisCycle.participatingPostNumbers.includes(p.num) 
+            !activeConversationForCycle.participatingPostNumbers.includes(p.num) 
         );
 
         if (eligiblePosts.length === 0) {
@@ -856,7 +856,7 @@ const runBotCycleCallback = useCallback(async () => {
             addAutonomousBotActivityLog(`Bot selected random post >>${targetPost.num} for reply.`, 'bot_activity');
             setAutonomousBotStatus(`Generating reply to >>${targetPost.num}...`);
 
-            let historyForGeminiCall = [...convoForThisCycle.history];
+            let historyForGeminiCall = [...activeConversationForCycle.history];
             
             let currentUserMessageText = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
             const currentUserMessageParts: Part[] = [];
@@ -926,10 +926,10 @@ const runBotCycleCallback = useCallback(async () => {
                             const botReplyChatMessage: ChatMessage = { id: `model-reply-to-${targetPost.num}-${newPostNum}`, role: 'model', parts: [{text: rawReplyBody}], timestamp: Date.now() }; 
                             const userMessageForHistory: ChatMessage = { id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMessageParts, timestamp: Date.now() - 100 };
                             
-                            convoForThisCycle = { // Update convoForThisCycle
-                                ...convoForThisCycle,
-                                participatingPostNumbers: [...convoForThisCycle.participatingPostNumbers, targetPost.num, newPostNum],
-                                history: [...convoForThisCycle.history, userMessageForHistory, botReplyChatMessage],
+                            activeConversationForCycle = { 
+                                ...activeConversationForCycle,
+                                participatingPostNumbers: [...activeConversationForCycle.participatingPostNumbers, targetPost.num, newPostNum],
+                                history: [...activeConversationForCycle.history, userMessageForHistory, botReplyChatMessage],
                                 lastBotReplyNum: newPostNum,
                                 status: 'active'
                             };
@@ -964,15 +964,15 @@ const runBotCycleCallback = useCallback(async () => {
                       } catch (parseErr) { addAutonomousBotActivityLog(`Gemini API error (parsing 429 message failed, in bot cycle): ${errorMsg}`, 'bot_error', geminiError); }
                 } else { addAutonomousBotActivityLog(`Gemini API error during bot reply generation: ${errorMsg}`, 'bot_error', geminiError); }
                 setAutonomousBotStatus(`Error: Gemini API issue for >>${targetPost.num}`);
-                convoForThisCycle = { ...convoForThisCycle, status: 'error' }; // Update convoForThisCycle
+                activeConversationForCycle = { ...activeConversationForCycle, status: 'error' };
             }
         }
     } else if (currentBotSettings.autonomousBotReplyMode === 'replies_to_bot') {
           addAutonomousBotActivityLog("Mode 'replies_to_bot' needs further development.", 'bot_warning');
     }
     
-    convoForThisCycle.lastCheckedTimestamp = Date.now();
-    setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, convoForThisCycle));
+    activeConversationForCycle.lastCheckedTimestamp = Date.now();
+    setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, activeConversationForCycle));
     
     setAutonomousBotStatus(`Waiting (${currentBotSettings.autonomousBotCycleIntervalSeconds}s) /${botBoard}/${botThreadId}`);
     addAutonomousBotActivityLog("Bot cycle finished.", 'bot_activity');
