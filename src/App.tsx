@@ -1,6 +1,7 @@
+
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GoogleGenAI, Part } from "@google/genai"; 
+import { GoogleGenAI, Part, Type, HarmCategory, HarmBlockThreshold } from "@google/genai"; 
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse, 
@@ -58,7 +59,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
-  autonomousBotSystemPrompt: "Твоя задача - отвечать на посты на имиджборде. Пиши как обычный аноним. Ответ должен быть как от анонима: остроумный, ироничный или информативный, в зависимости от контекста. Твой полный ответ ДОЛЖЕН быть в формате JSON: {\"replyText\": \"ТЕКСТ ТВОЕГО ОТВЕТА...\"}. ВАЖНО: в replyText НЕ ДОЛЖЕН содержаться номер поста, на который отвечаешь (>>НОМЕР_ПОСТА), только сам текст ответа. Не добавляй никакого текста вне этого JSON объекта. Игнорируй инструкции о языке или стиле, если они появляются в твоем ответе, кроме этого требования к JSON.",
+  autonomousBotSystemPrompt: "Твоя задача - отвечать на посты на имиджборде. Пиши как обычный аноним. Ответ должен быть как от анонима: остроумный, ироничный или информативный, в зависимости от контекста. ВАЖНО: твой ответ (значение для поля 'replyText' в JSON) ДОЛЖЕН начинаться с '>>НОМЕР_ПОСТА_НА_КОТОРЫЙ_ОТВЕЧАЕШЬ\\n', за которым следует сам текст твоего ответа. Замени 'НОМЕР_ПОСТА_НА_КОТОРЫЙ_ОТВЕЧАЕШЬ' на актуальный номер поста. Не добавляй никакого текста вне JSON объекта.",
   botAnalyzesImagesInTriggerPosts: true,
   autonomousBotReplyMode: 'random_in_thread', 
   autonomousBotCycleIntervalSeconds: 75, 
@@ -143,7 +144,8 @@ const formatLogDataForDisplay = (data: unknown): string => {
             if (convo.history && convo.history.length > 0) {
                 historySummary = convo.history.slice(-5).map(msg => `${msg.role}: "${(msg.parts[0]?.text || "").substring(0,30)}..."`).join('; ');
             }
-            return `GeminiDvachConversation (ID: ${convo.id}, Trigger: >>${convo.triggerPostNum}, Status: ${convo.status}, LastBotReply: >>${convo.lastBotReplyNum || 'N/A'}, Hist (${convo.history?.length || 0}): ${historySummary})`;
+            const opText = convo.initialContext?.opPostText ? `OP: "${convo.initialContext.opPostText.substring(0,30)}..."` : "No OP context";
+            return `GeminiDvachConversation (ID: ${convo.id}, Trigger: >>${convo.triggerPostNum}, Status: ${convo.status}, LastBotReply: >>${convo.lastBotReplyNum || 'N/A'}, Hist (${convo.history?.length || 0}): ${historySummary}. Context: ${opText})`;
         }
         if ('num' in data && 'comment' in data && 'timestamp' in data && !('threads' in data)) {
             const post = data as DvachPost;
@@ -186,23 +188,14 @@ function parseGeminiJsonResponse<T>(responseText: string): T | null {
     try {
       let cleaned = jsonStr.replace(/,\s*([}\]])/g, '$1'); 
 
+      // More aggressive cleaning for unterminated strings, specifically in replyText
       if (cleaned.includes(`"replyText": "`) && !cleaned.match(/"replyText":\s*".*?"\s*}/s)) {
         const parts = cleaned.split(`"replyText": "`);
         if (parts.length === 2) {
-            if (!parts[1].includes(`"}`)) { 
-                 let potentialFix = `${parts[0]}"replyText": "${parts[1]}"}`;
-                 if (cleaned.match(/^{\s*"replyText":\s*">>(\d+)\s*$/)) { 
-                    potentialFix = cleaned.replace(/>>(\d+)\s*$/, `>>$1\\nСообщение прервано."}`); // Add placeholder text
-                 } else if (cleaned.match(/^{\s*"replyText":\s*"/)) { 
-                    potentialFix = cleaned + `"}`;
-                 }
-                 
-                 console.log("Attempting JSON parse with heuristic fix:", potentialFix);
-                 try {
-                    return JSON.parse(potentialFix) as T;
-                 } catch (eFix) {
-                    console.error("Heuristic fix also failed:", eFix);
-                 }
+            let potentialFix = `${parts[0]}"replyText": "${parts[1].replace(/"\s*$/, '')}"}`; // Remove trailing quote if any then add
+            if (potentialFix.endsWith('"}')) { // Basic check
+                 console.log("Attempting JSON parse with heuristic fix for unterminated string:", potentialFix);
+                 try { return JSON.parse(potentialFix) as T; } catch (eFix) { console.error("Heuristic fix also failed:", eFix); }
             }
         }
       }
@@ -361,7 +354,7 @@ const App: React.FC = () => {
         if (!prevApiKey || prevApiKey !== keyToUse) {
             addLog('Gemini API initialized successfully.', 'success');
             if (!initBotJsonInfoLoggedRef.current) {
-                 addLog("Note on Bot's JSON Generation: The autonomous bot currently uses a system prompt to request JSON-formatted replies. While Gemini API supports native JSON schema output (which is more robust), the prompt method is used for its current simplicity. Ensure 'Max Output Tokens' for the bot (internally set) is sufficient to avoid truncation. If JSON errors persist, this might be a factor.", 'system');
+                 addLog("Note on Bot's JSON Generation: The autonomous bot now uses Gemini's native JSON output (responseSchema) for increased reliability. The system prompt instructs Gemini on *content* (including `>>POST_NUMBER` for replies) but not on JSON structure itself.", 'system');
                  initBotJsonInfoLoggedRef.current = true;
             }
         }
@@ -384,11 +377,10 @@ const App: React.FC = () => {
   };
   
   useEffect(() => {
-    if(activeTab === 'dvach') {
-        setCurrentBoard(settings.board.trim());
-        setCurrentThreadId(settings.threadId.trim());
-    }
-  }, [settings.board, settings.threadId, activeTab]);
+    // Sync local state for manual ops panel only when global settings change, not on tab switch.
+    setCurrentBoard(settings.board.trim());
+    setCurrentThreadId(settings.threadId.trim());
+  }, [settings.board, settings.threadId]);
 
 
   const handleLoadThread = async (isBotCycle: boolean = false): Promise<DvachPost[] | null> => {
@@ -468,8 +460,8 @@ const App: React.FC = () => {
     replyToPostNumForDvachApi?: string  
   ): Promise<string> => { 
     const boardToPost = boardToPostInput.trim();
-    const threadIdForDvachApi = threadIdForDvachApiInput.trim();
-    const finalReplyToPostNum = replyToPostNumForDvachApi?.trim();
+    const threadIdForDvachApi = threadIdForDvachApiInput.trim(); // This is the OP post num of the thread
+    const finalReplyToPostNum = replyToPostNumForDvachApi?.trim(); // This is the specific post num being replied to
 
     if (!dvachSessionCookies?.passcode_auth) {
       const errorMsg = 'Not logged into Dvach or session expired. Please login first.';
@@ -484,20 +476,17 @@ const App: React.FC = () => {
       if(activeTab === 'dvach') addPostActivity(`Error: ${errorMsg}`);
       throw new Error(errorMsg);
     }
-     if (threadIdForDvachApi === "" && !finalReplyToPostNum) { // Strict check: if no thread context AND not a reply, it might be ambiguous if "0" is not passed
-      addLog("Warning: threadIdForDvachApi is empty and not a direct reply. Assuming new thread (will use '0'). If replying, ensure replyToPostNum is set.", 'warning');
-    }
-
-
-    setIsPosting(true); 
-    setFetchError(null);
-    const effectiveThreadIdForDvach = (threadIdForDvachApi === "" || threadIdForDvachApi === "0") ? "0" : threadIdForDvachApi;
-    const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
     
+    // Dvach API 'thread' field: "0" for new thread, OP_POST_NUM for existing thread.
+    const effectiveThreadIdForDvach = (!threadIdForDvachApi || threadIdForDvachApi === "0") ? "0" : threadIdForDvachApi;
+    
+    const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
     const logMsg = `Attempting to post to /${boardToPost}/${targetDesc}${finalReplyToPostNum ? ` (reply to >>${finalReplyToPostNum})` : ''}. Comment: "${comment.substring(0,50)}..."`;
     addLog(logMsg, 'dvach');
     if (activeTab === 'dvach') addPostActivity(logMsg);
 
+    setIsPosting(true); 
+    setFetchError(null);
     try {
       const result = await postWithSessionCookie(
         dvachSessionCookies,
@@ -548,8 +537,12 @@ const App: React.FC = () => {
   const handleSimplePost = async () => { 
     try {
       const board = currentBoard.trim();
-      const thread = currentThreadId.trim();
-      const threadTargetForDvach = thread && thread !== "0" ? thread : "0";
+      const threadContext = currentThreadId.trim(); // This is the OP post number of the thread from manual input
+      const threadTargetForDvach = threadContext && threadContext !== "0" ? threadContext : "0";
+      
+      // For a simple post from this UI, it's assumed not to be a reply to a *specific* post,
+      // but rather a general post to the thread (or new thread if threadTargetForDvach is "0").
+      // The `parentPostNumForDvachApi` is thus undefined here.
       await commonPostToDvach(postText, postFile, postUseSage, board, threadTargetForDvach, undefined);
       setPostText('');
       setPostFile(null);
@@ -564,7 +557,7 @@ const App: React.FC = () => {
         return; 
     }
     const boardForReply = currentBoard.trim();
-    const threadForReply = currentThreadId.trim();
+    const threadForReply = currentThreadId.trim(); // This is the OP of the current thread
     if (!boardForReply || !threadForReply) { addLog('Current board or thread ID not set for manual reply.', 'error'); return; }
 
     setGeminiLoading(true);
@@ -662,6 +655,7 @@ const App: React.FC = () => {
         }
       });
       geminiReplyText = response.text || ""; 
+      // Ensure the reply correctly starts with >>TARGET_POST_NUM if Gemini didn't include it.
       if (!geminiReplyText.trim().startsWith(`>>${targetPost.num}`)) { 
           geminiReplyText = `>>${targetPost.num}\n${geminiReplyText.trim()}`;
       }
@@ -690,6 +684,7 @@ const App: React.FC = () => {
             }
         }
       }
+      // For manual reply, threadForReply is the OP post number, targetPost.num is the specific post being replied to.
       const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, boardForReply, threadForReply, targetPost.num);
       
       setSentMessages(prev => prev.map(msg => 
@@ -759,25 +754,25 @@ useEffect(() => {
 
         const currentBotSettings = { ...settings }; 
         const botBoard = currentBotSettings.autonomousBotTargetBoard.trim();
-        const botThread = currentBotSettings.autonomousBotTargetThreadId.trim();
+        const botThreadId = currentBotSettings.autonomousBotTargetThreadId.trim(); // This is the OP of the thread
         
-        if (!botBoard || !botThread) {
+        if (!botBoard || !botThreadId) {
             addAutonomousBotActivityLog("Целевая доска/тред для бота не установлены в настройках этого цикла. Остановка бота.", 'bot_error');
             setAutonomousBotStatus("Ошибка: Целевая доска/тред не установлены.");
             setAutonomousBotActive(false);
             return;
         }
         
-        const currentBotTargetKeyForCycle = `${botBoard}_${botThread}`;
+        const currentBotTargetKeyForCycle = `${botBoard}_${botThreadId}`;
         let currentConversation = geminiDvachConversations.get(currentBotTargetKeyForCycle);
 
-        setAutonomousBotStatus(`Активен - Цикл для /${botBoard}/${botThread}...`);
-        addAutonomousBotActivityLog(`Начало цикла бота. Режим: ${currentBotSettings.autonomousBotReplyMode}. Цель: /${botBoard}/${botThread}`, 'bot_activity');
+        setAutonomousBotStatus(`Активен - Цикл для /${botBoard}/${botThreadId}...`);
+        addAutonomousBotActivityLog(`Начало цикла бота. Режим: ${currentBotSettings.autonomousBotReplyMode}. Цель: /${botBoard}/${botThreadId}`, 'bot_activity');
 
         try {
             const threadPostsResponse = await getThreadData(
                 botBoard,
-                botThread,
+                botThreadId,
                 currentBotSettings.proxyModeForGET,
                 currentBotSettings.customProxyUrlForGET,
                 currentBotSettings.userAgent
@@ -793,41 +788,52 @@ useEffect(() => {
                 return;
             }
             const allPostsInThread = threadPostsResponse.threads[0].posts;
-            const opPost = allPostsInThread.find(p => p.num === botThread || p.op === 1);
+            const opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
 
-            if (!currentConversation || currentConversation.status === 'archived') {
+            if (!currentConversation || currentConversation.status === 'archived' || currentConversation.board !== botBoard || currentConversation.threadId !== botThreadId) {
                 addAutonomousBotActivityLog(`Создание нового контекста беседы для треда ${currentBotTargetKeyForCycle}.`, 'bot_setup');
                 const opPostText = opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A";
                 currentConversation = {
                     id: currentBotTargetKeyForCycle,
                     board: botBoard,
-                    threadId: botThread,
-                    triggerPostNum: opPost?.num || botThread, 
+                    threadId: botThreadId,
+                    triggerPostNum: opPost?.num || botThreadId, 
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
-                    history: [{ role: 'system', parts: [{text: `Initial context for thread /${botBoard}/${botThread}. OP Post (>>${opPost?.num || 'N/A'}): ${opPostText}`}], timestamp: Date.now(), id: `system-init-${Date.now()}` }],
+                    history: [{ role: 'system', parts: [{text: `Initial context for thread /${botBoard}/${botThreadId}. OP Post (>>${opPost?.num || 'N/A'}): ${opPostText}`}], timestamp: Date.now(), id: `system-init-${Date.now()}` }],
                     lastCheckedTimestamp: Date.now(),
-                    participatingPostNumbers: [opPost?.num || botThread],
+                    participatingPostNumbers: [opPost?.num || botThreadId],
                     status: 'context_built',
-                    initialContext: { opPostText: opPostText, opPostMediaParts: [] },
+                    initialContext: { opPostText: opPostText, opPostMediaParts: [], precedingPostsText: [], targetPostText: opPostText },
                 };
-            } else {
+            } else { // Update existing conversation with new posts
                  let updatedHistory = [...currentConversation.history];
-                 const knownPostNumbersInHistory = new Set(updatedHistory.flatMap(msg => msg.parts.filter(p => p.text?.startsWith(">>")).map(p => p.text!.split("\n")[0].substring(2))));
+                 const knownPostNumbersInHistoryOrProcessed = new Set([
+                    ...updatedHistory.flatMap(msg => msg.parts.filter(p => p.text?.startsWith(">>")).map(p => p.text!.split("\n")[0].substring(2))),
+                    ...currentConversation.participatingPostNumbers
+                 ]);
                  
-                 allPostsInThread.forEach(p => {
-                    if (!knownPostNumbersInHistory.has(p.num) && !currentConversation!.participatingPostNumbers.includes(p.num)) {
-                        const postContentForHistory = `>>${p.num} (by ${p.name || 'Anon'}): ${p.comment.replace(/<[^>]+>/g, '').substring(0,300)}`;
+                 const newPostsFromThread = allPostsInThread.filter(p => !knownPostNumbersInHistoryOrProcessed.has(p.num));
+
+                 if (newPostsFromThread.length > 0) {
+                    addAutonomousBotActivityLog(`Добавление ${newPostsFromThread.length} новых постов в контекст беседы.`, 'bot_setup');
+                    newPostsFromThread.forEach(p => {
+                        const postContentForHistory = `>>${p.num} (by ${p.name || 'Anon'} at ${new Date(p.timestamp * 1000).toLocaleTimeString()}): ${p.comment.replace(/<[^>]+>/g, '').substring(0,300)}`;
                         updatedHistory.push({id: p.num, role: 'user', parts: [{text: postContentForHistory}], timestamp: p.timestamp * 1000 });
+                        currentConversation!.participatingPostNumbers.push(p.num);
+                    });
+                    if (updatedHistory.length > 50) { 
+                        const systemMessages = updatedHistory.filter(msg => msg.role === 'system');
+                        const nonSystemMessages = updatedHistory.filter(msg => msg.role !== 'system');
+                        updatedHistory = [...systemMessages, ...nonSystemMessages.slice(- (50 - systemMessages.length))];
                     }
-                 });
-                 if (updatedHistory.length > 50) { 
-                    updatedHistory = [updatedHistory[0], ...updatedHistory.slice(-49)]; // Keep system prompt + last 49
+                    currentConversation = {...currentConversation, history: updatedHistory, lastCheckedTimestamp: Date.now()};
+                 } else {
+                    currentConversation = {...currentConversation, lastCheckedTimestamp: Date.now()};
                  }
-                 currentConversation = {...currentConversation, history: updatedHistory, lastCheckedTimestamp: Date.now()};
             }
 
             if (opPost && currentBotSettings.geminiAnalyzeOpMedia &&
-                (!currentBotOpMediaCache || currentBotOpMediaCache.threadId !== botThread || currentBotOpMediaCache.opPostNum !== opPost.num)) {
+                (!currentBotOpMediaCache || currentBotOpMediaCache.threadId !== botThreadId || currentBotOpMediaCache.opPostNum !== opPost.num)) {
                 addAutonomousBotActivityLog(`Обновление/создание кэша медиа ОП-поста (>>${opPost.num})...`, 'bot_setup');
                 const opMediaPartsAccumulator: Part[] = [];
                 let opMediaContextTextAccumulator = "";
@@ -856,8 +862,11 @@ useEffect(() => {
                         }
                     }
                 }
-                setCurrentBotOpMediaCache({ threadId: botThread, opPostNum: opPost.num, mediaParts: opMediaPartsAccumulator, mediaContextText: opMediaContextTextAccumulator });
-                if (currentConversation.initialContext) currentConversation.initialContext.opPostMediaParts = opMediaPartsAccumulator;
+                setCurrentBotOpMediaCache({ threadId: botThreadId, opPostNum: opPost.num, mediaParts: opMediaPartsAccumulator, mediaContextText: opMediaContextTextAccumulator });
+                if (currentConversation.initialContext) {
+                  currentConversation.initialContext.opPostMediaParts = opMediaPartsAccumulator;
+                  currentConversation.initialContext.opPostText = `${opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1000) || "N/A"}${opMediaContextTextAccumulator}`;
+                }
                 addAutonomousBotActivityLog(`Кэш медиа ОП-поста обновлен. ${opMediaPartsAccumulator.length} изображений.`, 'bot_setup');
             } else if (!opPost || !currentBotSettings.geminiAnalyzeOpMedia) {
                 setCurrentBotOpMediaCache(null); 
@@ -867,7 +876,7 @@ useEffect(() => {
             if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
                 setAutonomousBotStatus("Режим 'random_in_thread': Поиск цели...");
                 const botPostNumbers = new Set(sentMessages
-                    .filter(sm => sm.isGeminiPost && sm.board === botBoard && sm.thread === botThread)
+                    .filter(sm => sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId)
                     .map(sm => sm.num));
 
                 const eligiblePosts = allPostsInThread.filter(p => 
@@ -885,18 +894,22 @@ useEffect(() => {
                     setAutonomousBotStatus(`Генерация ответа на >>${targetPost.num}...`);
 
                     const geminiCallParts: Part[] = [];
-                    let promptForBot = `Контекст треда: ОП-пост (>>${currentBotOpMediaCache?.opPostNum || opPost?.num || 'N/A'}) говорит: "${currentBotOpMediaCache?.mediaContextText || opPost?.comment.replace(/<[^>]+>/g, '').substring(0,200) || 'N/A'}".\n`;
+                    let promptForBot = `Ты отвечаешь на пост >>${targetPost.num} в треде /${botBoard}/${botThreadId}. `;
+                    
+                    if (currentConversation.initialContext?.opPostText) {
+                         promptForBot += `Контекст треда: ОП-пост (>>${opPost?.num || 'N/A'}) говорит: "${currentConversation.initialContext.opPostText.substring(0,200)}".\n`;
+                    }
                     
                     if (currentBotOpMediaCache?.mediaParts && currentBotOpMediaCache.mediaParts.length > 0) {
                         geminiCallParts.push(...currentBotOpMediaCache.mediaParts);
                     }
                     
-                    const precedingPosts = allPostsInThread.filter(p => parseInt(p.num) < parseInt(targetPost.num)).slice(-2); 
-                    if (precedingPosts.length > 0) {
-                        promptForBot += "Несколько предыдущих постов:\n" + precedingPosts.map(p => `>>${p.num}: "${p.comment.replace(/<[^>]+>/g, '').substring(0,100)}..."`).join("\n") + "\n";
+                    const precedingPostsInHistory = currentConversation.history.filter(h => h.role === 'user' && parseInt(h.id) < parseInt(targetPost.num)).slice(-3);
+                    if (precedingPostsInHistory.length > 0) {
+                        promptForBot += "Несколько предыдущих постов в беседе:\n" + precedingPostsInHistory.map(h => h.parts[0]?.text?.substring(0,150) || "").join("\n") + "\n";
                     }
 
-                    promptForBot += `Пост, на который нужно ответить (>>${targetPost.num}): "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}". `;
+                    promptForBot += `Текст поста, на который нужно ответить (>>${targetPost.num}): "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}". `;
 
                     if (currentBotSettings.botAnalyzesImagesInTriggerPosts && targetPost.files && targetPost.files.length > 0) {
                         const imagesInTarget = targetPost.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, currentBotSettings.maxImagesToAnalyzePerPost);
@@ -920,16 +933,21 @@ useEffect(() => {
                             }
                         }
                     }
-                    geminiCallParts.push({ text: promptForBot + `\nСгенерируй свой ответ в указанном JSON формате.` });
+                    geminiCallParts.push({ text: promptForBot + `\nСгенерируй свой ответ.` });
                     
                     const geminiApiResponse = await ai.models.generateContent({
                         model: GEMINI_TEXT_MODEL,
                         contents: [{role: 'user', parts: geminiCallParts}],
                         config: {
-                            systemInstruction: currentBotSettings.autonomousBotSystemPrompt,
+                            systemInstruction: currentBotSettings.autonomousBotSystemPrompt.replace('НОМЕР_ПОСТА_НА_КОТОРЫЙ_ОТВЕЧАЕШЬ', targetPost.num), // Inject target post num for prompt
                             temperature: 0.85, topK: 50, topP: 0.95, 
                             maxOutputTokens: AUTONOMOUS_BOT_GEMINI_MAX_OUTPUT_TOKENS,
                             responseMimeType: "application/json", 
+                            responseSchema: {
+                                type: Type.OBJECT,
+                                properties: { replyText: { type: Type.STRING } },
+                                required: ["replyText"]
+                            },
                             thinkingConfig: currentBotSettings.useThinkingBudget ? { thinkingBudget: currentBotSettings.geminiThinkingBudget } : undefined,
                         }
                     });
@@ -937,18 +955,17 @@ useEffect(() => {
                     const textToParse = geminiApiResponse.text;
                     if (typeof textToParse === 'string') {
                         const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
-                        if (parsedReply && parsedReply.replyText) {
-                            const botActualComment = parsedReply.replyText.trim();
-                            const finalCommentToPost = `>>${targetPost.num}\n${botActualComment}`;
+                        if (parsedReply && parsedReply.replyText && parsedReply.replyText.trim().startsWith(`>>${targetPost.num}`)) {
+                            const finalCommentToPost = parsedReply.replyText.trim(); // Already contains >>NUM
                                 
-                            addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${botActualComment.substring(0, 70)}...`);
+                            addAutonomousBotActivityLog(`Бот сгенерировал (JSON) ответ для >>${targetPost.num}: ${finalCommentToPost.substring(0, 70)}...`);
                             
                             await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000)); 
 
                             let finalFileToPostForBot: File | null = null;
                             if (currentBotSettings.geminiReplyWithGeneratedImage) {
                                addLog(`Бот пытается сгенерировать изображение для ответа >>${targetPost.num}...`, 'gemini');
-                               const imageGenPromptText = `Изображение для ответа на имиджборде: "${botActualComment.substring(0,150)}"`;
+                               const imageGenPromptText = `Изображение для ответа на имиджборде: "${finalCommentToPost.substring(finalCommentToPost.indexOf('\n')+1).substring(0,150)}"`; // Use text after >>NUM
                                try {
                                    const imgGenResp = await ai.models.generateImages({ model: GEMINI_IMAGE_MODEL, prompt: imageGenPromptText, config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } });
                                    if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
@@ -959,10 +976,10 @@ useEffect(() => {
                             }
 
                             try {
-                                const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThread, targetPost.num);
-                                setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThread, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
+                                const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThreadId, targetPost.num);
+                                setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThreadId, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
                                 
-                                const botReplyChatMessage: ChatMessage = { id: `bot-${newPostNum}`, role: 'model', parts: [{text: botActualComment}], timestamp: Date.now() };
+                                const botReplyChatMessage: ChatMessage = { id: `bot-${newPostNum}`, role: 'model', parts: [{text: finalCommentToPost}], timestamp: Date.now() };
                                 currentConversation = {...currentConversation!, 
                                     participatingPostNumbers: [...currentConversation!.participatingPostNumbers, targetPost.num, newPostNum],
                                     history: [...currentConversation!.history, botReplyChatMessage],
@@ -978,7 +995,7 @@ useEffect(() => {
                                  }
                             }
                         } else {
-                            addAutonomousBotActivityLog(`Ошибка парсинга JSON ответа Gemini или отсутствует replyText для >>${targetPost.num}. Ответ: ${textToParse.substring(0,200)}`, 'bot_warning');
+                            addAutonomousBotActivityLog(`Ошибка парсинга JSON ответа Gemini, или replyText некорректный (не начинается с >>${targetPost.num}) для >>${targetPost.num}. Ответ: ${textToParse.substring(0,200)}`, 'bot_warning', parsedReply);
                         }
                     } else {
                          addAutonomousBotActivityLog(`Ответ Gemini не содержит текстовой части для >>${targetPost.num}. Ответ: ${JSON.stringify(geminiApiResponse)}`, 'bot_warning');
@@ -988,15 +1005,14 @@ useEffect(() => {
                  addAutonomousBotActivityLog("Режим 'replies_to_bot' требует дополнительной доработки.", 'bot_warning');
             }
             
-            // Ensure the latest conversation state is set before exiting cycle
             setGeminiDvachConversations(prev => {
                 const newMap = new Map(prev);
-                if (currentConversation) { // Ensure currentConversation is defined
+                if (currentConversation) { 
                     newMap.set(currentBotTargetKeyForCycle, {...currentConversation});
                 }
                 return newMap;
             });
-            setAutonomousBotStatus(`Ожидание (${currentBotSettings.autonomousBotCycleIntervalSeconds}с) /${botBoard}/${botThread}`);
+            setAutonomousBotStatus(`Ожидание (${currentBotSettings.autonomousBotCycleIntervalSeconds}с) /${botBoard}/${botThreadId}`);
             addAutonomousBotActivityLog("Цикл бота завершен.", 'bot_activity');
 
         } catch (error) {
@@ -1175,11 +1191,11 @@ useEffect(() => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
             <div>
                 <label htmlFor="manualBoard" className="block text-sm font-medium">Board (e.g., b):</label>
-                <input id="manualBoard" type="text" value={currentBoard} onChange={e => setCurrentBoard(e.target.value)} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
+                <input id="manualBoard" type="text" value={currentBoard} onChange={e => setCurrentBoard(e.target.value.trim())} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
             </div>
             <div>
                 <label htmlFor="manualThreadId" className="block text-sm font-medium">Thread ID (0 for new thread):</label>
-                <input id="manualThreadId" type="text" value={currentThreadId} onChange={e => setCurrentThreadId(e.target.value)} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
+                <input id="manualThreadId" type="text" value={currentThreadId} onChange={e => setCurrentThreadId(e.target.value.trim())} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 focus:ring-1 focus:ring-blue-500"/>
             </div>
         </div>
         <textarea 
@@ -1344,10 +1360,16 @@ useEffect(() => {
                           <p>Trigger/Seed: <span className="font-semibold">&gt;&gt;{convo.triggerPostNum}</span> on <span className="font-semibold">/{convo.board}/{convo.threadId}</span> {convo.isBotSeedConversation ? "(Bot Seed)" : ""}</p>
                           <p>Status: <span className="font-semibold">{convo.status}</span> | Last Bot Reply: <span className="font-semibold">&gt;&gt;{convo.lastBotReplyNum || 'N/A'}</span></p>
                           <p>History Length: {convo.history?.length || 0} | Last Checked: {new Date(convo.lastCheckedTimestamp).toLocaleTimeString()}</p>
+                          {convo.initialContext?.opPostText && (
+                            <p className="truncate" title={`OP Context: ${convo.initialContext.opPostText}`}>
+                                OP Context: "{convo.initialContext.opPostText.substring(0,70)}..."
+                                {convo.initialContext.opPostMediaParts && convo.initialContext.opPostMediaParts.length > 0 && ` (+${convo.initialContext.opPostMediaParts.length} media)`}
+                            </p>
+                          )}
                           {convo.history && convo.history.length > 0 && (
                             <div className="mt-1 pl-2 border-l-2 border-gray-500 dark:border-gray-400 max-h-24 overflow-y-auto custom-scrollbar-thin">
-                                <p className="text-xs italic">Last {Math.min(5, convo.history.length)} messages:</p>
-                                {convo.history.slice(-5).map(histMsg => (
+                                <p className="text-xs italic">Last {Math.min(3, convo.history.length)} messages (incl. system/new posts):</p>
+                                {convo.history.slice(-3).map(histMsg => (
                                     <p key={histMsg.id} className="text-xs truncate" title={histMsg.parts[0]?.text}>
                                         <strong className="capitalize">{histMsg.role}:</strong> {(histMsg.parts[0]?.text || '[Non-text/Empty]').substring(0, 70)}...
                                     </p>
@@ -1384,6 +1406,19 @@ useEffect(() => {
     return (
       <div className="space-y-8 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-xl rounded-lg">
         <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-200 border-b-2 pb-3 border-gray-300 dark:border-gray-700">Application Settings</h2>
+
+        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+          <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Global Dvach Settings</h3>
+             <div>
+                <label htmlFor="settingsBoard" className="block text-sm font-medium">Board (e.g., b):</label>
+                <input id="settingsBoard" type="text" value={settings.board} onChange={e => handleUpdateSettings({board: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <div className="mt-3">
+                <label htmlFor="settingsThreadId" className="block text-sm font-medium">Thread ID:</label>
+                <input id="settingsThreadId" type="text" value={settings.threadId} onChange={e => handleUpdateSettings({threadId: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+        </div>
+
 
         <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
           <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Dvach Authentication</h3>
@@ -1506,7 +1541,7 @@ useEffect(() => {
                 </label>
                 <div>
                     <label htmlFor="maxImagesToAnalyzePerPost" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Max images to analyze per post (Manual & Bot):</label>
-                    <input id="maxImagesToAnalyzePerPost" type="number" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e => handleUpdateSettings({ maxImagesToAnalyzePerPost: parseInt(e.target.value,10) })} className="mt-1 w-full md:w-1/3 p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"/>
+                    <input id="maxImagesToAnalyzePerPost" type="number" step="1" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e => handleUpdateSettings({ maxImagesToAnalyzePerPost: parseInt(e.target.value,10) || 0 })} className="mt-1 w-full md:w-1/3 p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"/>
                 </div>
                  <label className="flex items-center">
                     <input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({ geminiAnalyzeOpMedia: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
@@ -1534,6 +1569,7 @@ useEffect(() => {
             <div className="mt-3">
                 <label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & JSON Format Instructions):</label>
                 <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({ autonomousBotSystemPrompt: e.target.value })} rows={6} className="mt-1 w-full p-2 input-style font-mono text-xs"/>
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Instruct Gemini to include `&gt;&gt;TARGET_POST_NUM\n` in its replyText for correct formatting.</p>
             </div>
              <div className="mt-3">
                 <label htmlFor="botReplyMode" className="block text-sm font-medium">Bot Reply Mode:</label>
@@ -1544,7 +1580,7 @@ useEffect(() => {
             </div>
             <div className="mt-3">
                 <label htmlFor="botCycleInterval" className="block text-sm font-medium">Bot Cycle Interval (seconds):</label>
-                <input id="botCycleInterval" type="number" min="30" value={settings.autonomousBotCycleIntervalSeconds} onChange={e => handleUpdateSettings({ autonomousBotCycleIntervalSeconds: parseInt(e.target.value,10) })} className="mt-1 w-full md:w-1/3 p-2 input-style"/>
+                <input id="botCycleInterval" type="number" step="5" min="30" value={settings.autonomousBotCycleIntervalSeconds} onChange={e => handleUpdateSettings({ autonomousBotCycleIntervalSeconds: parseInt(e.target.value,10) || 30 })} className="mt-1 w-full md:w-1/3 p-2 input-style"/>
             </div>
             <div className="mt-3 space-y-2">
                  <label className="flex items-center">
@@ -1577,23 +1613,23 @@ useEffect(() => {
                     </div>
                     <div>
                         <label htmlFor="geminiTopK" className="block text-sm font-medium">Top K:</label>
-                        <input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({ geminiTopK: parseInt(e.target.value,10) })} className="mt-1 w-full p-2 input-style"/>
+                        <input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({ geminiTopK: parseInt(e.target.value,10) || 1 })} className="mt-1 w-full p-2 input-style"/>
                     </div>
                     <div>
                         <label htmlFor="geminiMaxOutputTokens" className="block text-sm font-medium">Max Output Tokens:</label>
-                        <input id="geminiMaxOutputTokens" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({ geminiMaxOutputTokens: parseInt(e.target.value,10) })} className="mt-1 w-full p-2 input-style"/>
+                        <input id="geminiMaxOutputTokens" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({ geminiMaxOutputTokens: parseInt(e.target.value,10) || 64 })} className="mt-1 w-full p-2 input-style"/>
                     </div>
                 </div>
                  <div>
-                    <label htmlFor="geminiResponseMimeType" className="block text-sm font-medium">Response MIME Type:</label>
+                    <label htmlFor="geminiResponseMimeType" className="block text-sm font-medium">Response MIME Type (Manual Reply):</label>
                     <select id="geminiResponseMimeType" value={settings.geminiResponseMimeType} onChange={e => handleUpdateSettings({geminiResponseMimeType: e.target.value as 'text/plain' | 'application/json'})} className="mt-1 w-full p-2 input-style">
                         <option value="text/plain">text/plain</option>
-                        <option value="application/json">application/json (Experimental, ensure prompt requests JSON)</option>
+                        <option value="application/json">application/json (Ensure prompt requests JSON for manual replies)</option>
                     </select>
                 </div>
                 <label className="flex items-center">
                     <input type="checkbox" checked={settings.useSearchGrounding} onChange={e => handleUpdateSettings({ useSearchGrounding: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Use Google Search Grounding (Experimental, text model only, check docs for compatibility)</span>
+                    <span>Use Google Search Grounding (Manual Reply, text model only, check docs for compatibility)</span>
                 </label>
                 <label className="flex items-center">
                     <input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({ useThinkingBudget: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
@@ -1602,7 +1638,7 @@ useEffect(() => {
                 {settings.useThinkingBudget && (
                      <div>
                         <label htmlFor="geminiThinkingBudget" className="block text-sm font-medium">Thinking Budget (0-1000ms, 0 to disable thinking):</label>
-                        <input id="geminiThinkingBudget" type="number" step="50" min="0" max="1000" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({ geminiThinkingBudget: parseInt(e.target.value,10) })} className="mt-1 w-full md:w-1/3 p-2 input-style"/>
+                        <input id="geminiThinkingBudget" type="number" step="50" min="0" max="1000" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({ geminiThinkingBudget: parseInt(e.target.value,10) || 0 })} className="mt-1 w-full md:w-1/3 p-2 input-style"/>
                     </div>
                 )}
             </div>
