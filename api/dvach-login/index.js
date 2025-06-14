@@ -67,9 +67,9 @@ export default async function handler(req, res) {
     console.log(`${timestamp} [api/dvach-login] Attempting Dvach login with purchased passcode... UA: ${clientUserAgent}`);
     const loginFormData = new FormDataNode(); 
     loginFormData.append('passcode', purchasedPasscode);
-    loginFormData.append('json', '1'); 
+    // 'json=1' should be a query parameter, not in FormData for this endpoint.
 
-    const loginUrl = `${DVACH_BASE_URL}/user/passlogin`;
+    const loginUrl = `${DVACH_BASE_URL}/user/passlogin?json=1`; // Correct: json=1 as query param
     let loginResponse;
 
     try {
@@ -121,13 +121,14 @@ export default async function handler(req, res) {
       if (!loginResponse.ok) { 
           return res.status(loginResponse.status).json({ result: 0, error: { code: loginResponse.status, message: `Dvach login request failed: ${loginResponseText.substring(0,100)}` } });
       }
-      return res.status(500).json({ result: 0, error: { code: -1006, message: `Dvach login response was OK but not valid JSON. Response: ${loginResponseText.substring(0,100)}` } });
+      // If Dvach response is 200 OK but not JSON, it's an issue because json=1 was specified.
+      return res.status(500).json({ result: 0, error: { code: -1006, message: `Dvach login response was OK but not valid JSON (json=1 was used). Response: ${loginResponseText.substring(0,100)}` } });
     }
 
     if (loginJson.error && typeof loginJson.error.code === 'number' && typeof loginJson.error.message === 'string') {
         console.error(`${timestamp} [api/dvach-login] Dvach login failed with structured error. Code: ${loginJson.error.code}, Message: ${loginJson.error.message}`);
         res.setHeader('Content-Type', 'application/json');
-        return res.status(401).json({
+        return res.status(loginResponse.status).json({ // Use Dvach's status if available and indicative of error
             result: 0,
             error: { code: loginJson.error.code, message: `Dvach login error: ${loginJson.error.message}` }
         });
@@ -170,31 +171,23 @@ export default async function handler(req, res) {
     const errorTimestamp = new Date().toISOString();
     console.error(`${errorTimestamp} [api/dvach-login] CRITICAL UNHANDLED ERROR in handler:`, unhandledError);
     try {
-      // Ensure Content-Type is application/json for this catch-all
-      // Check if headers are already sent before trying to set them.
       if (!res.headersSent) {
         res.setHeader('Content-Type', 'application/json');
       }
       
       const errorMessage = unhandledError instanceof Error ? unhandledError.message : 'Unknown unhandled error';
-      // Sanitize errorMessage to ensure it's JSON-safe and not too long
       const safeErrorMessage = String(errorMessage).substring(0, 500); 
 
-      // Check if headers are already sent before trying to send status/JSON.
       if (!res.headersSent) {
         return res.status(500).json({
           result: 0,
           error: { code: -5000, message: `An unexpected server error occurred in /api/dvach-login. Details: ${safeErrorMessage}` }
         });
       } else {
-        // If headers are already sent, we can't send a new JSON response.
-        // Log this specific situation. Vercel will likely close the connection or send its default error.
         console.error(`${errorTimestamp} [api/dvach-login] Headers already sent. Could not send JSON 500 for unhandled error.`);
       }
     } catch (finalCatchError) {
-      // If even attempting to send the JSON 500 response fails.
       console.error(`${errorTimestamp} [api/dvach-login] FAILED TO SEND JSON 500 RESPONSE in final catch:`, finalCatchError);
-      // Vercel will handle sending a generic 500 HTML page.
     }
   }
 }
