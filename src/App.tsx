@@ -306,23 +306,27 @@ const App: React.FC = () => {
     const keyToUse = settings.geminiApiKeySource === 'env' ? processEnvApiKey : settings.userGeminiApiKey;
     if (keyToUse) {
       try {
-        if (!ai || (ai as any)._apiKey !== keyToUse) { // Re-initialize if key changed or not set
-            const genAI = new GoogleGenAI({ apiKey: keyToUse });
-            setAi(genAI);
-            addLog('Gemini API initialized successfully.', 'success');
-            if (!initBotJsonInfoLoggedRef.current) {
-                 addLog("Note on Bot's JSON Generation: The autonomous bot uses Gemini's native JSON output (responseSchema) for structure. The bot's system prompt guides reply *content and style* only. Client-side code prepends '>>POST_NUMBER'.", 'system');
-                 initBotJsonInfoLoggedRef.current = true;
-            }
+        if (!ai || (ai as any)._apiKey !== keyToUse) { // Condition to actually re-initialize
+          const genAI = new GoogleGenAI({ apiKey: keyToUse });
+          setAi(genAI);
+          addLog('Gemini API client (re)initialized.', 'success'); 
+          if (!initBotJsonInfoLoggedRef.current) { 
+             addLog("Note on Bot's JSON: Bot uses Gemini's native JSON output. Client code prefixes '>>POST_NUMBER'.", 'system');
+             initBotJsonInfoLoggedRef.current = true;
+          }
         }
+        // No log here if AI is already initialized and key is current, prevents spamming "initialized successfully"
       } catch (error) {
         addLog(`Failed to initialize Gemini API: ${(error as Error).message}. Check API Key format/validity.`, 'error', error);
         setAi(null);
       }
     } else {
-      setAi(null);
-      if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) addLog('Gemini API key (Manual) is not set.', 'warning');
-      else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected or accessible.', 'warning');
+      setAi(null); // Clear AI instance if no key
+      if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) {
+        addLog('Gemini API key (Manual) is not set. Gemini features disabled.', 'warning');
+      } else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) {
+        addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected. Gemini features disabled.', 'warning');
+      }
     }
   }, [settings.geminiApiKeySource, settings.userGeminiApiKey, processEnvApiKey, ai, addLog]);
 
@@ -1423,7 +1427,14 @@ useEffect(() => {
           <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Dvach Authentication</h3>
           <div>
             <label htmlFor="settingsPurchasedPasscode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Purchased Passcode:</label>
-            <input id="settingsPurchasedPasscode" type="password" value={settings.purchasedPasscode} onChange={e => handleUpdateSettings({ purchasedPasscode: e.target.value })} className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"/>
+            <input 
+              id="settingsPurchasedPasscode" 
+              type="password" 
+              value={settings.purchasedPasscode} 
+              onChange={e => handleUpdateSettings({ purchasedPasscode: e.target.value })} 
+              className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
+              autoComplete="new-password"
+            />
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Required for posting and some bot functions.</p>
           </div>
         </div>
@@ -1440,7 +1451,15 @@ useEffect(() => {
           {settings.geminiApiKeySource === 'user' && (
             <div className="mt-3">
               <label htmlFor="userGeminiApiKey" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Manual Gemini API Key:</label>
-              <input id="userGeminiApiKey" type="password" placeholder="Enter your Gemini API Key" value={settings.userGeminiApiKey} onChange={e => handleUpdateSettings({userGeminiApiKey: e.target.value})} className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"/>
+              <input 
+                id="userGeminiApiKey" 
+                type="password" 
+                placeholder="Enter your Gemini API Key" 
+                value={settings.userGeminiApiKey} 
+                onChange={e => handleUpdateSettings({userGeminiApiKey: e.target.value})} 
+                className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
+                autoComplete="new-password"
+              />
             </div>
           )}
         </div>
