@@ -28,7 +28,7 @@ import {
 
 // Ensure VITE_GEMINI_API_KEY is read correctly from import.meta.env
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-
+// Minor comment to try and force cache refresh on Vercel - 2024-07-29
 
 interface BotReplySchema {
   replyText: string; 
@@ -120,7 +120,7 @@ const formatLogDataForDisplay = (data: unknown): string => {
     return JSON.stringify(data, replacer, 2);
   } catch (e) {
     console.warn("JSON.stringify failed in formatLogDataForDisplay, falling back to String() or alternative representation.", e, data);
-    if (typeof data === 'symbol') return data.toString();
+    if (typeof data === 'symbol') return data.toString(); // Explicitly handle symbol
     if (typeof data === 'object' && data !== null && typeof (data as any).toString === 'function') {
       const strRepresentation = (data as any).toString();
       if (strRepresentation !== '[object Object]' || Object.keys(data).length === 0) {
@@ -822,7 +822,8 @@ const runBotCycleCallback = useCallback(async () => {
             workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
         }
     }
-
+    
+    // CRITICAL GUARD: Ensure workingConvo is defined before proceeding
     if (!workingConvo) {
         addAutonomousBotActivityLog("CRITICAL: Bot conversation context is null/undefined (e.g. thread fetch failed without existing context). Cycle ending.", 'bot_error', { contextKey: currentBotTargetKeyForCycle, existingConvo: !!existingConversation });
         setAutonomousBotStatus("Error: Bot context issue or critical thread fetch failure.");
