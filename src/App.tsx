@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleGenAI, Part } from "@google/genai"; 
 import {
-  AppSettings, LogEntry, DvachPost, SentMessageInfo, ChatMessage, ProxyModeForGET,
+  AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET, /* ChatMessage removed */
   DvachThreadResponse, 
   DvachFile, GeminiDvachConversation,
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache
@@ -1632,12 +1632,13 @@ useEffect(() => {
             case 'bot_activity': case 'bot_setup': bgColor = 'bg-teal-100 dark:bg-teal-900'; textColor = 'text-teal-800 dark:text-teal-200'; borderColorClass = 'border-teal-500'; break;
             default: bgColor = 'bg-gray-100 dark:bg-gray-700'; textColor = 'text-gray-800 dark:text-gray-200'; borderColorClass = 'border-gray-500';
           }
+          const logDataString = formatLogDataForDisplay(log.data);
           return (
             <div key={log.id} className={`text-xs p-2 mb-1.5 rounded-md border-l-4 ${borderColorClass} ${bgColor} ${textColor} shadow-sm font-mono`}>
               <span className="font-semibold">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
               {log.data && (
                 <pre className="mt-1 text-xs whitespace-pre-wrap bg-black/5 dark:bg-black/20 p-1.5 rounded-sm overflow-x-auto custom-scrollbar-thin">
-                  {formatLogDataForDisplay(log.data)}
+                  {logDataString}
                 </pre>
               )}
             </div>
