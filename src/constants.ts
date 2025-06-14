@@ -1,4 +1,3 @@
-
 // constants.ts - Store widely used, unchanging values for the application.
 
 export const DVACH_DOMAINS: string[] = ["https://2ch.hk", "https://2ch.life", "https://2ch.su"];
@@ -18,7 +17,7 @@ export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1";
 export const APP_VERSION = "2.9.0"; 
 export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
-export const AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS = 1536; // For internal use in App.tsx bot logic
+export const AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS = 8000; // Increased for autonomous bot
 
 export const THREAD_CACHE_DURATION_MS = 1 * 45 * 1000; 
 export const MAX_LOG_ENTRIES = 300;
