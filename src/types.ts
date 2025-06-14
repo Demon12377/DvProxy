@@ -185,7 +185,8 @@ export interface AppSettings {
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number; 
   autonomousBotAllowReplyToSelf: boolean; 
-  autonomousBotInitialContextScope: AutonomousBotInitialContextScope; // New setting
+  autonomousBotInitialContextScope: AutonomousBotInitialContextScope;
+  autonomousBotFullThreadContextMaxChars: number; // New setting for full thread context length
 
   // Gemini Model Configuration (mainly for manual replies; bot might use simplified or system prompt dictates style)
   geminiSystemInstruction: string; // For manual replies primarily
