@@ -118,7 +118,8 @@ const formatLogDataForDisplay = (data: unknown): string => {
     }
     return JSON.stringify(data, replacer, 2);
   } catch (e) {
-    console.warn("JSON.stringify failed in formatLogDataForDisplay, falling back to String()", e, data);
+    console.warn("JSON.stringify failed in formatLogDataForDisplay, falling back to String() or alternative representation.", e, data);
+    if (typeof data === 'symbol') return data.toString();
     if (typeof data === 'object' && data !== null && typeof (data as any).toString === 'function') {
       const strRepresentation = (data as any).toString();
       if (strRepresentation !== '[object Object]' || Object.keys(data).length === 0) {
@@ -703,7 +704,7 @@ const runBotCycleCallback = useCallback(async () => {
         );
 
         if (!threadPostsResponse || threadPostsResponse.threads?.[0]?.posts?.length === 0) {
-            addAutonomousBotActivityLog("No posts found or error loading thread for bot cycle.", 'bot_warning');
+            addAutonomousBotActivityLog("No posts found or error loading thread for bot cycle.", 'bot_warning', { threadKey: currentBotTargetKeyForCycle });
             setAutonomousBotStatus("Error loading thread data for bot.");
             if (existingConversation) {
                 workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
@@ -815,15 +816,15 @@ const runBotCycleCallback = useCallback(async () => {
             }
         }
     } catch (err) {
-        addAutonomousBotActivityLog(`Error fetching thread data for bot: ${(err as Error).message}`, 'bot_error', err);
+        addAutonomousBotActivityLog(`Error fetching thread data for bot: ${(err as Error).message}. Cycle ending prematurely.`, 'bot_error', err);
         if (existingConversation) {
             workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
         }
     }
 
     if (!workingConvo) {
-        addAutonomousBotActivityLog("CRITICAL: Bot conversation context is null/undefined or thread fetch failed. Cycle ending.", 'bot_error');
-        setAutonomousBotStatus("Error: Bot context issue / Thread fetch failed critically.");
+        addAutonomousBotActivityLog("CRITICAL: Bot conversation context is null/undefined (e.g. thread fetch failed without existing context). Cycle ending.", 'bot_error', { contextKey: currentBotTargetKeyForCycle, existingConvo: !!existingConversation });
+        setAutonomousBotStatus("Error: Bot context issue or critical thread fetch failure.");
         if (existingConversation && existingConversation.status !== 'error') {
              const erroredConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' as const };
              setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, erroredConvo));
