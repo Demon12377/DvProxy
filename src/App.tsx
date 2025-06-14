@@ -1636,11 +1636,11 @@ useEffect(() => {
           return (
             <div key={log.id} className={`text-xs p-2 mb-1.5 rounded-md border-l-4 ${borderColorClass} ${bgColor} ${textColor} shadow-sm font-mono`}>
               <span className="font-semibold">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
-              {log.data && (
+              {log.data ? (
                 <pre className="mt-1 text-xs whitespace-pre-wrap bg-black/5 dark:bg-black/20 p-1.5 rounded-sm overflow-x-auto custom-scrollbar-thin">
                   {logDataString}
                 </pre>
-              )}
+              ) : null}
             </div>
           );
         })}
