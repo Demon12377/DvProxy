@@ -1041,8 +1041,8 @@ useEffect(() => {
        ? (isGeminiPostByBot ? "bg-purple-50 dark:bg-purple-900/50" : "bg-blue-50 dark:bg-blue-900/50")
        : "bg-gray-50 dark:bg-gray-700";
 
-     const borderColor = isMyPost
-       ? (isGeminiPostByBot
+     const borderColor = (isMyPost)
+       ? ((isGeminiPostByBot)
          ? "border-purple-300 dark:border-purple-700"
          : "border-blue-300 dark:border-blue-700")
        : "border-gray-200 dark:border-gray-600";
