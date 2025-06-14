@@ -46,22 +46,19 @@ export default async function handler(req, res) {
       });
     });
     
-    // console.log(`${timestamp} [api/dvach-post] Parsed client fields (excluding file data):`, JSON.stringify(Object.fromEntries(Object.entries(fields).map(([k,v]) => [k, Array.isArray(v) && v.length === 1 ? v[0] : v])), null, 2));
-
     const getFieldValue = (fieldName) => {
       const value = fields[fieldName];
-      return Array.isArray(value) ? value[0] : value;
+      const singleValue = Array.isArray(value) ? value[0] : value;
+      return typeof singleValue === 'string' ? singleValue.trim() : singleValue;
     };
 
     const board = getFieldValue('board');
-    // This is the overall thread context (OP post number), or "0" if client intends to make a new thread.
     const clientContextThreadId = getFieldValue('thread_id_for_dvach'); 
-    // This is the specific post number being replied to, if any.
     const clientReplyToParentNum = getFieldValue('parent_num_for_dvach'); 
     const comment = getFieldValue('comment');
     const passcodeAuthCookieValue = getFieldValue('passcode_auth_cookie_value');
-    const userCodeCookieValue = getFieldValue('user_code_cookie_value'); // Optional
-    const emailSage = getFieldValue('email'); // 'sage' or undefined
+    const userCodeCookieValue = getFieldValue('user_code_cookie_value'); 
+    const emailSage = getFieldValue('email'); 
     const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT;
 
 
@@ -79,32 +76,13 @@ export default async function handler(req, res) {
     const dvachPostFormData = new FormDataNode();
     dvachPostFormData.append('board', board);
     
-    // Dvach API field 'thread': OP post number of the thread, or "0" for a new thread.
-    // clientContextThreadId comes from the client, representing this.
     const dvachApiThreadField = (!clientContextThreadId || clientContextThreadId === "0") ? "0" : clientContextThreadId;
     dvachPostFormData.append('thread', dvachApiThreadField);
     console.log(`${timestamp} [api/dvach-post] Dvach API 'thread' field set to: ${dvachApiThreadField}`);
 
-    // Dvach API field 'parent': Specific post number being replied to.
-    // clientReplyToParentNum comes from the client, representing this.
-    // If clientReplyToParentNum is not provided, it's either a new thread or a general post in an existing thread (not a direct reply).
-    // In these cases, 'parent' might not be needed or could be "0" or the thread OP num.
-    // makaba.md suggests 'parent' holds the thread_id for non-OP posts.
-    // For direct replies, this should be the specific post.
     if (clientReplyToParentNum) {
       dvachPostFormData.append('parent', clientReplyToParentNum);
       console.log(`${timestamp} [api/dvach-post] Dvach API 'parent' (reply to specific post) field set to: ${clientReplyToParentNum}`);
-    } else if (dvachApiThreadField !== "0") {
-      // If posting to an existing thread (dvachApiThreadField is OP num) but not a direct reply to a specific post,
-      // Dvach might expect 'parent' to be the thread OP num.
-      // Or it might not be needed if 'thread' is already set to OP num.
-      // For safety, if it's not a new thread and not a direct reply, let's also set parent to the thread OP num.
-      // This aligns with makaba.md's "parent: ID треда данного поста ... 0 для первого поста треда".
-      // dvachPostFormData.append('parent', dvachApiThreadField);
-      // console.log(`${timestamp} [api/dvach-post] Dvach API 'parent' (general post in thread) field set to: ${dvachApiThreadField}`);
-      // Re-evaluating: if not a direct reply, `parent` field might not be strictly necessary if `thread` is already the OP.
-      // Let's only set `parent` if `clientReplyToParentNum` is explicitly provided.
-      // If it's a general post in a thread, `thread` field (set to OP) should be enough.
     }
     
     dvachPostFormData.append('comment', comment);
@@ -115,7 +93,6 @@ export default async function handler(req, res) {
     }
     
     const fileEntryArray = files.file; 
-    let actualFileAttached = false;
     if (fileEntryArray && fileEntryArray.length > 0) {
       const file = fileEntryArray[0];
       if (file && file.filepath && file.size > 0) {
@@ -123,19 +100,11 @@ export default async function handler(req, res) {
           filename: file.originalFilename || 'upload.tmp', 
           contentType: file.mimetype || 'application/octet-stream', 
         });
-        actualFileAttached = true;
         console.log(`${timestamp} [api/dvach-post] Actual file attached to Dvach request: ${file.originalFilename}`);
       }
     }
 
-    // Makaba seems to require a file field even if empty, or it can error.
-    // If no actual file, some clients send an empty 'file[]' or a dummy.
-    // For simplicity, if no file is attached, we won't add any 'file[]' or 'dummy' field.
-    // Dvach should handle empty file submissions correctly if the board allows text-only posts,
-    // or if it's a reply where files are optional.
-    // If a board requires a file for OPs, and `dvachApiThreadField` is "0" and no file, Dvach will error (-19).
-
-    const dvachPostUrl = `${DVACH_BASE_URL}/user/posting?nc=1`; // nc=1 is often used
+    const dvachPostUrl = `${DVACH_BASE_URL}/user/posting?nc=1`;
     
     let cookieHeader = `passcode_auth=${passcodeAuthCookieValue}`;
     if (userCodeCookieValue) {
@@ -165,7 +134,6 @@ export default async function handler(req, res) {
 
     const dvachPostResponseText = await dvachPostResponse.text();
     console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response status: ${dvachPostResponse.status}`);
-    // console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response text (first 500 chars): ${dvachPostResponseText.substring(0, 500)}`);
 
     res.setHeader('Content-Type', 'application/json');
     
