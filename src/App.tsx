@@ -1,7 +1,7 @@
 
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GoogleGenAI, Part, Type, HarmCategory, HarmBlockThreshold } from "@google/genai"; 
+import { GoogleGenAI, Part, Type } from "@google/genai"; 
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse, 
