@@ -21,7 +21,6 @@ export default async function handler(req, res) {
   const timestamp = new Date().toISOString();
   console.log(`${timestamp} [api/dvach-login] Request received. Method: ${req.method}, URL: ${req.url}`);
   
-  // Set CORS headers for all responses from this function
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent');
@@ -32,7 +31,6 @@ export default async function handler(req, res) {
 
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST, OPTIONS');
-    // Ensure Content-Type is application/json for error responses too
     res.setHeader('Content-Type', 'application/json');
     return res.status(405).json({ result: 0, error: { code: 405, message: `Method Not Allowed. Only POST requests are accepted for /api/dvach-login. Received: ${req.method}` } });
   }
@@ -93,7 +91,6 @@ export default async function handler(req, res) {
     const loginResponseText = await loginResponse.text();
     console.log(`${timestamp} [api/dvach-login] Dvach login response status: ${loginResponse.status}, text (first 300): ${loginResponseText.substring(0,300)}`);
     
-    // Handle 303 Redirect specifically, as Dvach might do this on successful HTML form-like login
     if (loginResponse.status === 303) {
       const passcodeAuthCookieForRedirect = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'passcode_auth');
       const userCodeCookieForRedirect = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'usercode');
@@ -130,7 +127,7 @@ export default async function handler(req, res) {
     if (loginJson.error && typeof loginJson.error.code === 'number' && typeof loginJson.error.message === 'string') {
         console.error(`${timestamp} [api/dvach-login] Dvach login failed with structured error. Code: ${loginJson.error.code}, Message: ${loginJson.error.message}`);
         res.setHeader('Content-Type', 'application/json');
-        return res.status(401).json({ // Use appropriate status code for auth failure
+        return res.status(401).json({
             result: 0,
             error: { code: loginJson.error.code, message: `Dvach login error: ${loginJson.error.message}` }
         });
@@ -163,7 +160,7 @@ export default async function handler(req, res) {
     
     res.setHeader('Content-Type', 'application/json');
     return res.status(200).json({
-      result: loginJson.result, // Use the result from Dvach (1 or 2)
+      result: loginJson.result, 
       message: loginJson.message || "Dvach login successful.",
       passcode_auth_cookie_value: passcodeAuthCookie,
       user_code_cookie_value: userCodeCookie, 
@@ -172,11 +169,32 @@ export default async function handler(req, res) {
   } catch (unhandledError) {
     const errorTimestamp = new Date().toISOString();
     console.error(`${errorTimestamp} [api/dvach-login] CRITICAL UNHANDLED ERROR in handler:`, unhandledError);
-    // Ensure Content-Type is application/json for this catch-all
-    res.setHeader('Content-Type', 'application/json');
-    return res.status(500).json({
-      result: 0,
-      error: { code: -5000, message: `An unexpected server error occurred in /api/dvach-login. Please check server logs. Details: ${unhandledError.message}` }
-    });
+    try {
+      // Ensure Content-Type is application/json for this catch-all
+      // Check if headers are already sent before trying to set them.
+      if (!res.headersSent) {
+        res.setHeader('Content-Type', 'application/json');
+      }
+      
+      const errorMessage = unhandledError instanceof Error ? unhandledError.message : 'Unknown unhandled error';
+      // Sanitize errorMessage to ensure it's JSON-safe and not too long
+      const safeErrorMessage = String(errorMessage).substring(0, 500); 
+
+      // Check if headers are already sent before trying to send status/JSON.
+      if (!res.headersSent) {
+        return res.status(500).json({
+          result: 0,
+          error: { code: -5000, message: `An unexpected server error occurred in /api/dvach-login. Details: ${safeErrorMessage}` }
+        });
+      } else {
+        // If headers are already sent, we can't send a new JSON response.
+        // Log this specific situation. Vercel will likely close the connection or send its default error.
+        console.error(`${errorTimestamp} [api/dvach-login] Headers already sent. Could not send JSON 500 for unhandled error.`);
+      }
+    } catch (finalCatchError) {
+      // If even attempting to send the JSON 500 response fails.
+      console.error(`${errorTimestamp} [api/dvach-login] FAILED TO SEND JSON 500 RESPONSE in final catch:`, finalCatchError);
+      // Vercel will handle sending a generic 500 HTML page.
+    }
   }
 }
