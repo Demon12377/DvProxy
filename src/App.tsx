@@ -707,7 +707,6 @@ const runBotCycleCallback = useCallback(async () => {
             if (existingConvoOnError) {
                 workingConversation = { ...existingConvoOnError, lastCheckedTimestamp: Date.now(), status: 'error' };
             }
-            // No further processing if thread is empty/error
         } else {
             const allPostsInThread = threadPostsResponse.threads[0].posts;
             const opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
@@ -734,7 +733,6 @@ const runBotCycleCallback = useCallback(async () => {
                 initialContextTextForSystemMessage = `CONTEXT_START: OP Post (>>${opPost?.num || 'N/A'}) for thread /${botBoard}/${botThreadId} on ${DVACH_DOMAINS[0]}:\n"${opPostTextContent}"\nCONTEXT_END\n`;
             }
             
-            // Update OP Media Cache if necessary
             if (opPost && currentBotSettings.geminiAnalyzeOpMedia &&
                 (!currentBotOpMediaCache || currentBotOpMediaCache.threadId !== botThreadId || currentBotOpMediaCache.opPostNum !== opPost.num)) {
                 addAutonomousBotActivityLog(`Updating/creating OP media cache (>>${opPost.num})...`, 'bot_setup');
@@ -782,7 +780,7 @@ const runBotCycleCallback = useCallback(async () => {
                     initialContext: { opPostNum: opPost?.num, opPostText: initialContextTextForSystemMessage, opPostMediaParts: opMediaPartsForInitialContext }
                 };
             } else {
-                 workingConversation = JSON.parse(JSON.stringify(baseConversation)); // Clone for modification
+                 workingConversation = JSON.parse(JSON.stringify(baseConversation)); 
                  let updatedHistory = [...workingConversation.history];
                  const knownPostNumbersInHistoryOrProcessed = new Set([
                     ...updatedHistory.filter(msg => msg.role === 'user' && msg.id.startsWith("user-dvach-")).map(msg => msg.id.replace("user-dvach-","")),
@@ -816,126 +814,127 @@ const runBotCycleCallback = useCallback(async () => {
                  }
             }
             
-            if(!workingConversation) { 
-                addAutonomousBotActivityLog("Conversation context could not be established. Skipping further actions.", 'bot_error');
-            } else if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
-                setAutonomousBotStatus("Mode 'random_in_thread': Finding target...");
-                const botPostNumbers = new Set(sentMessages
-                    .filter(sm => sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId)
-                    .map(sm => sm.num));
+            if (!workingConversation) { 
+                addAutonomousBotActivityLog("Conversation context missing after update attempt. Skipping further actions.", 'bot_error');
+            } else {
+                // All bot actions that require workingConversation are now within this 'else' block
+                if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
+                    setAutonomousBotStatus("Mode 'random_in_thread': Finding target...");
+                    const botPostNumbers = new Set(sentMessages
+                        .filter(sm => sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId)
+                        .map(sm => sm.num));
 
-                const eligiblePosts = allPostsInThread.filter(p => 
-                    p.num !== opPost?.num && 
-                    (!botPostNumbers.has(p.num) || currentBotSettings.autonomousBotAllowReplyToSelf) && 
-                    !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) &&
-                    !workingConversation!.participatingPostNumbers.includes(p.num) 
-                );
+                    const eligiblePosts = allPostsInThread.filter(p => 
+                        p.num !== opPost?.num && 
+                        (!botPostNumbers.has(p.num) || currentBotSettings.autonomousBotAllowReplyToSelf) && 
+                        !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) &&
+                        !workingConversation.participatingPostNumbers.includes(p.num) 
+                    );
 
-                if (eligiblePosts.length === 0) {
-                    addAutonomousBotActivityLog("No eligible posts for random reply in this cycle.", 'bot_activity');
-                } else {
-                    const targetPost = eligiblePosts[Math.floor(Math.random() * eligiblePosts.length)];
-                    addAutonomousBotActivityLog(`Bot selected random post >>${targetPost.num} for reply.`, 'bot_activity');
-                    setAutonomousBotStatus(`Generating reply to >>${targetPost.num}...`);
+                    if (eligiblePosts.length === 0) {
+                        addAutonomousBotActivityLog("No eligible posts for random reply in this cycle.", 'bot_activity');
+                    } else {
+                        const targetPost = eligiblePosts[Math.floor(Math.random() * eligiblePosts.length)];
+                        addAutonomousBotActivityLog(`Bot selected random post >>${targetPost.num} for reply.`, 'bot_activity');
+                        setAutonomousBotStatus(`Generating reply to >>${targetPost.num}...`);
 
-                    let historyForGeminiCall = [...workingConversation.history];
-                    
-                    let currentUserMessageText = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
-                    const currentUserMessageParts: Part[] = [];
+                        let historyForGeminiCall = [...workingConversation.history];
+                        
+                        let currentUserMessageText = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
+                        const currentUserMessageParts: Part[] = [];
 
-                    if (currentBotSettings.botAnalyzesImagesInTriggerPosts && targetPost.files && targetPost.files.length > 0) {
-                        const imagesInTarget = targetPost.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, currentBotSettings.maxImagesToAnalyzePerPost);
-                        for (const file of imagesInTarget) {
-                             try {
-                                const imageUrl = `${DVACH_DOMAINS[0]}${file.path}`;
-                                const proxiedImageUrl = buildProxiedGetUrl(imageUrl, currentBotSettings.proxyModeForImagesGET, currentBotSettings.customProxyUrlForImagesGET);
-                                addAutonomousBotActivityLog(`Fetching image ${file.name} from post >>${targetPost.num} using proxy '${currentBotSettings.proxyModeForImagesGET}'`, 'bot_activity');
-                                const imgResp = await fetch(proxiedImageUrl);
-                                if (!imgResp.ok) throw new Error(`Proxy fetch failed for target image ${file.name}: ${imgResp.status}`);
-                                const blob = await imgResp.blob();
-                                let mimeType = blob.type;
-                                if (!mimeType || !mimeType.startsWith('image/')) mimeType = file.type === 1 ? 'image/jpeg' : file.type === 2 ? 'image/png' : file.type === 4 ? 'image/gif' : file.type === 9 ? 'image/webp' : 'image/jpeg';
-                                const base64 = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onloadend = () => res((r.result as string).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
-                                currentUserMessageParts.push({ inlineData: { mimeType: mimeType, data: base64 } });
-                                currentUserMessageText += ` This post contains image '${file.name}'.`;
-                            } catch (e) { addAutonomousBotActivityLog(`Error fetching image ${file.name} from post >>${targetPost.num}: ${(e as Error).message}`, 'bot_warning'); }
-                        }
-                    }
-                    currentUserMessageParts.push({text: currentUserMessageText + `\nGenerate your reply.`});
-                    historyForGeminiCall.push({ role: 'user', parts: currentUserMessageParts, timestamp: Date.now(), id: `user-dvach-${targetPost.num}`});
-                    
-                    const geminiApiResponse = await ai.models.generateContent({
-                        model: GEMINI_TEXT_MODEL,
-                        contents: historyForGeminiCall, 
-                        config: {
-                            systemInstruction: currentBotSettings.autonomousBotSystemPrompt, 
-                            temperature: 0.85, topK: 50, topP: 0.95, 
-                            maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
-                            responseMimeType: "application/json", 
-                            responseSchema: { type: Type.OBJECT, properties: { replyText: { type: Type.STRING } }, required: ["replyText"] },
-                        }
-                    });
-
-                    const textToParse = geminiApiResponse.text;
-                    if (typeof textToParse === 'string') {
-                        const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
-                        if (parsedReply && parsedReply.replyText) {
-                            let rawReplyBody = parsedReply.replyText.trim();
-                            // Defensively remove any prefix Gemini might have added
-                            rawReplyBody = rawReplyBody.replace(new RegExp(`^>>${targetPost.num}\\s*\\n?`), '').trim();
-                            const finalCommentToPost = `>>${targetPost.num}\n${rawReplyBody}`; 
-                                
-                            addAutonomousBotActivityLog(`Bot generated (JSON) reply for >>${targetPost.num}: ${rawReplyBody.substring(0, 70)}...`);
-                            await new Promise(resolve => window.setTimeout(resolve, Math.random() * 2000 + 1000)); 
-
-                            let finalFileToPostForBot: File | null = null;
-                            if (currentBotSettings.geminiReplyWithGeneratedImage) {
-                               addLog(`Bot attempting to generate image for reply >>${targetPost.num}...`, 'gemini');
-                               const imageGenPromptText = `Imageboard reply context: "${rawReplyBody.substring(0,150)}"`;
-                               try {
-                                   const imgGenResp = await ai.models.generateImages({ model: GEMINI_IMAGE_MODEL, prompt: imageGenPromptText, config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } });
-                                   if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
-                                       finalFileToPostForBot = await base64ToFile(imgGenResp.generatedImages[0].image.imageBytes, `bot_img_${Date.now()}.jpg`, imgGenResp.generatedImages[0].image.mimeType || 'image/jpeg');
-                                       addLog(`Bot generated image for reply >>${targetPost.num}.`, 'gemini');
-                                   } else { addLog(`Bot image generation failed or no image returned for >>${targetPost.num}.`, 'bot_warning');}
-                               } catch (imgErrBot) { addLog(`Bot image generation error for >>${targetPost.num}: ${(imgErrBot as Error).message}.`, 'bot_warning'); }
+                        if (currentBotSettings.botAnalyzesImagesInTriggerPosts && targetPost.files && targetPost.files.length > 0) {
+                            const imagesInTarget = targetPost.files.filter(f => f.type === 1 || f.type === 2 || f.type === 4 || f.type === 9).slice(0, currentBotSettings.maxImagesToAnalyzePerPost);
+                            for (const file of imagesInTarget) {
+                                 try {
+                                    const imageUrl = `${DVACH_DOMAINS[0]}${file.path}`;
+                                    const proxiedImageUrl = buildProxiedGetUrl(imageUrl, currentBotSettings.proxyModeForImagesGET, currentBotSettings.customProxyUrlForImagesGET);
+                                    addAutonomousBotActivityLog(`Fetching image ${file.name} from post >>${targetPost.num} using proxy '${currentBotSettings.proxyModeForImagesGET}'`, 'bot_activity');
+                                    const imgResp = await fetch(proxiedImageUrl);
+                                    if (!imgResp.ok) throw new Error(`Proxy fetch failed for target image ${file.name}: ${imgResp.status}`);
+                                    const blob = await imgResp.blob();
+                                    let mimeType = blob.type;
+                                    if (!mimeType || !mimeType.startsWith('image/')) mimeType = file.type === 1 ? 'image/jpeg' : file.type === 2 ? 'image/png' : file.type === 4 ? 'image/gif' : file.type === 9 ? 'image/webp' : 'image/jpeg';
+                                    const base64 = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onloadend = () => res((r.result as string).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+                                    currentUserMessageParts.push({ inlineData: { mimeType: mimeType, data: base64 } });
+                                    currentUserMessageText += ` This post contains image '${file.name}'.`;
+                                } catch (e) { addAutonomousBotActivityLog(`Error fetching image ${file.name} from post >>${targetPost.num}: ${(e as Error).message}`, 'bot_warning'); }
                             }
+                        }
+                        currentUserMessageParts.push({text: currentUserMessageText + `\nGenerate your reply.`});
+                        historyForGeminiCall.push({ role: 'user', parts: currentUserMessageParts, timestamp: Date.now(), id: `user-dvach-${targetPost.num}`});
+                        
+                        const geminiApiResponse = await ai.models.generateContent({
+                            model: GEMINI_TEXT_MODEL,
+                            contents: historyForGeminiCall, 
+                            config: {
+                                systemInstruction: currentBotSettings.autonomousBotSystemPrompt, 
+                                temperature: 0.85, topK: 50, topP: 0.95, 
+                                maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
+                                responseMimeType: "application/json", 
+                                responseSchema: { type: Type.OBJECT, properties: { replyText: { type: Type.STRING } }, required: ["replyText"] },
+                            }
+                        });
 
-                            try {
-                                const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThreadId, targetPost.num);
-                                setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThreadId, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
-                                
-                                if (workingConversation) {
-                                    const botReplyChatMessage: ChatMessage = { id: `model-reply-to-${targetPost.num}-${newPostNum}`, role: 'model', parts: [{text: rawReplyBody}], timestamp: Date.now() }; 
-                                    const userMessageForHistory: ChatMessage = { id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMessageParts, timestamp: Date.now() - 100 };
+                        const textToParse = geminiApiResponse.text;
+                        if (typeof textToParse === 'string') {
+                            const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
+                            if (parsedReply && parsedReply.replyText) {
+                                let rawReplyBody = parsedReply.replyText.trim();
+                                rawReplyBody = rawReplyBody.replace(new RegExp(`^>>${targetPost.num}\\s*\\n?`), '').trim();
+                                const finalCommentToPost = `>>${targetPost.num}\n${rawReplyBody}`; 
                                     
-                                    workingConversation.participatingPostNumbers = [...workingConversation.participatingPostNumbers, targetPost.num, newPostNum];
-                                    workingConversation.history = [...workingConversation.history, userMessageForHistory, botReplyChatMessage];
-                                    workingConversation.lastBotReplyNum = newPostNum;
+                                addAutonomousBotActivityLog(`Bot generated (JSON) reply for >>${targetPost.num}: ${rawReplyBody.substring(0, 70)}...`);
+                                await new Promise(resolve => window.setTimeout(resolve, Math.random() * 2000 + 1000)); 
+
+                                let finalFileToPostForBot: File | null = null;
+                                if (currentBotSettings.geminiReplyWithGeneratedImage) {
+                                   addLog(`Bot attempting to generate image for reply >>${targetPost.num}...`, 'gemini');
+                                   const imageGenPromptText = `Imageboard reply context: "${rawReplyBody.substring(0,150)}"`;
+                                   try {
+                                       const imgGenResp = await ai.models.generateImages({ model: GEMINI_IMAGE_MODEL, prompt: imageGenPromptText, config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } });
+                                       if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
+                                           finalFileToPostForBot = await base64ToFile(imgGenResp.generatedImages[0].image.imageBytes, `bot_img_${Date.now()}.jpg`, imgGenResp.generatedImages[0].image.mimeType || 'image/jpeg');
+                                           addLog(`Bot generated image for reply >>${targetPost.num}.`, 'gemini');
+                                       } else { addLog(`Bot image generation failed or no image returned for >>${targetPost.num}.`, 'bot_warning');}
+                                   } catch (imgErrBot) { addLog(`Bot image generation error for >>${targetPost.num}: ${(imgErrBot as Error).message}.`, 'bot_warning'); }
                                 }
-                                setAutonomousBotStatus(`Replied as >>${newPostNum} to >>${targetPost.num}`);
-                            } catch (postError) {
-                                 const pe = postError as Error;
-                                 if (pe.message.toLowerCase().includes("вы постите слишком быстро") || pe.message.includes("-8")) {
-                                    addAutonomousBotActivityLog(`Posting error: Posting too fast. Skipping this reply. Consider increasing bot cycle interval.`, 'bot_warning', {message: pe.message});
-                                 } else { throw pe; } 
+
+                                try {
+                                    const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThreadId, targetPost.num);
+                                    setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThreadId, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
+                                    
+                                    if (workingConversation) { // Check again, though should be defined here
+                                        const botReplyChatMessage: ChatMessage = { id: `model-reply-to-${targetPost.num}-${newPostNum}`, role: 'model', parts: [{text: rawReplyBody}], timestamp: Date.now() }; 
+                                        const userMessageForHistory: ChatMessage = { id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMessageParts, timestamp: Date.now() - 100 };
+                                        
+                                        workingConversation.participatingPostNumbers = [...workingConversation.participatingPostNumbers, targetPost.num, newPostNum];
+                                        workingConversation.history = [...workingConversation.history, userMessageForHistory, botReplyChatMessage];
+                                        workingConversation.lastBotReplyNum = newPostNum;
+                                    }
+                                    setAutonomousBotStatus(`Replied as >>${newPostNum} to >>${targetPost.num}`);
+                                } catch (postError) {
+                                     const pe = postError as Error;
+                                     if (pe.message.toLowerCase().includes("вы постите слишком быстро") || pe.message.includes("-8")) {
+                                        addAutonomousBotActivityLog(`Posting error: Posting too fast. Skipping this reply. Consider increasing bot cycle interval.`, 'bot_warning', {message: pe.message});
+                                     } else { throw pe; } 
+                                }
+                            } else {
+                                addAutonomousBotActivityLog(`Error parsing Gemini JSON response or replyText missing for >>${targetPost.num}. Response: ${textToParse.substring(0,200)}`, 'bot_warning', parsedReply);
                             }
                         } else {
-                            addAutonomousBotActivityLog(`Error parsing Gemini JSON response or replyText missing for >>${targetPost.num}. Response: ${textToParse.substring(0,200)}`, 'bot_warning', parsedReply);
+                             addAutonomousBotActivityLog(`Gemini response has no text part for >>${targetPost.num}. Response: ${JSON.stringify(geminiApiResponse)}`, 'bot_warning');
                         }
-                    } else {
-                         addAutonomousBotActivityLog(`Gemini response has no text part for >>${targetPost.num}. Response: ${JSON.stringify(geminiApiResponse)}`, 'bot_warning');
                     }
+                } else if (currentBotSettings.autonomousBotReplyMode === 'replies_to_bot') {
+                     addAutonomousBotActivityLog("Mode 'replies_to_bot' needs further development.", 'bot_warning');
                 }
-            } else if (currentBotSettings.autonomousBotReplyMode === 'replies_to_bot') {
-                 addAutonomousBotActivityLog("Mode 'replies_to_bot' needs further development.", 'bot_warning');
-            }
+            } // End of 'else' for defined workingConversation
         } // End of else block for successful thread data fetch
         
-        // Persist workingConversation state at the end of try block or if it was modified due to error loading thread
         if (workingConversation) {
             workingConversation.lastCheckedTimestamp = Date.now();
-            setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, workingConversation!));
+            setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, workingConversation));
         }
 
         setAutonomousBotStatus(`Waiting (${currentBotSettings.autonomousBotCycleIntervalSeconds}s) /${botBoard}/${botThreadId}`);
@@ -1364,393 +1363,247 @@ useEffect(() => {
                             )}
 
                             {convo.history && convo.history.length > 0 && (
-                              <div className="mt-2">
-                                <p className="font-medium text-gray-700 dark:text-gray-300">Last {Math.min(15, convo.history.length)} messages in conversation history:</p>
-                                <div className="max-h-48 overflow-y-auto custom-scrollbar-thin border border-gray-200 dark:border-gray-600 p-1.5 rounded-md bg-white dark:bg-gray-800">
-                                  {convo.history.slice(-15).map(histMsg => (
-                                      <div key={histMsg.id} className="mb-1 p-1 rounded-sm odd:bg-gray-100 dark:odd:bg-gray-700/50">
-                                        <p className="text-xs" title={histMsg.parts[0]?.text}>
-                                            <strong className="capitalize">
-                                                {histMsg.role === 'user' && histMsg.parts[0]?.text?.startsWith("Post >>") ? `User (${histMsg.parts[0].text.split(" ")[2]})` : 
-                                                 histMsg.role === 'user' && histMsg.parts[0]?.text?.startsWith("CONTEXT_START:") ? 'Context Setup' : histMsg.role}
-                                                :
-                                            </strong> 
-                                            <span className="ml-1">{(histMsg.parts[0]?.text || '[Non-text/Empty]').substring(0, 150)}
-                                            {(histMsg.parts[0]?.text || '').length > 150 ? '...' : ''}
-                                            </span>
-                                        </p>
-                                        {histMsg.parts.length > 1 && <p className="text-xs italic text-gray-500 dark:text-gray-400 ml-2">(+ {histMsg.parts.length -1} media/other parts)</p>}
-                                      </div>
-                                  ))}
-                                </div>
-                              </div>
+                                <details className="mt-1 text-xs">
+                                    <summary className="cursor-pointer text-gray-600 dark:text-gray-400 italic">Last {Math.min(5, convo.history.length)} messages in history...</summary>
+                                    <div className="pl-3 pt-1 space-y-0.5 max-h-32 overflow-y-auto custom-scrollbar">
+                                        {convo.history.slice(-5).map((msg, idx) => (
+                                            <p key={idx} className="truncate">
+                                                <strong className="capitalize">{msg.role}:</strong> {(msg.parts[0]?.text || '[Non-text/Media]').substring(0, 100)}...
+                                            </p>
+                                        ))}
+                                    </div>
+                                </details>
                             )}
                           </div>
                       </details>
                     ) : null
-                ))
+                  ))
             )}
         </div>
-         <button 
+        <button
             onClick={() => {
-                if(window.confirm("Are you sure you want to clear all tracked bot conversation contexts? This cannot be undone.")){
-                    setGeminiDvachConversations(new Map());
-                    addLog("All Gemini-Dvach bot conversation contexts cleared by user.", "bot_warning");
-                }
+                setGeminiDvachConversations(new Map());
+                addLog("Cleared all tracked Bot Conversation Contexts.", "bot_warning");
             }}
+            className="mt-4 px-3 py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
             disabled={geminiDvachConversations.size === 0}
-            className="mt-3 px-3 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
         >
-            <IconTrash className="mr-1 h-4 w-4"/> Clear All Tracked Conversation Contexts
+            <IconTrash className="mr-1.5 h-4 w-4"/> Clear All Tracked Conversation Contexts
         </button>
       </div>
-       <p className="text-xs text-gray-500 dark:text-gray-400">Other bot settings (persona, reply mode, image analysis) can be configured in the main "Settings" tab.</p>
+      <p className="text-xs text-gray-500 dark:text-gray-400">Other bot settings (persona, reply mode, image analysis) can be configured in the main "Settings" tab.</p>
     </div>
   );
 
-  const renderSettingsPanel = () => {
-    const isCustomUrlForGetEditable = settings.proxyModeForGET === 'custom_general_prefix' || settings.proxyModeForGET === 'custom_general_param' || settings.proxyModeForGET === 'custom_go_x2u' || settings.proxyModeForGET === 'custom_cors_anywhere' || settings.proxyModeForGET === 'custom_codetabs';
-    const isCustomUrlForImagesEditable = settings.proxyModeForImagesGET === 'custom_general_prefix' || settings.proxyModeForImagesGET === 'custom_general_param' || settings.proxyModeForImagesGET === 'custom_go_x2u' || settings.proxyModeForImagesGET === 'custom_cors_anywhere' || settings.proxyModeForImagesGET === 'custom_codetabs';
-    const currentYear = new Date().getFullYear();
-
-    return (
-      <div className="space-y-8 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-xl rounded-lg">
-        <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-200 border-b-2 pb-3 border-gray-300 dark:border-gray-700">Application Settings</h2>
-
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-          <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Global Dvach Settings</h3>
-             <div>
-                <label htmlFor="settingsBoard" className="block text-sm font-medium">Board (e.g., b):</label>
-                <input id="settingsBoard" type="text" value={settings.board} onChange={e => handleUpdateSettings({board: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
-            </div>
-            <div className="mt-3">
-                <label htmlFor="settingsThreadId" className="block text-sm font-medium">Thread ID:</label>
-                <input id="settingsThreadId" type="text" value={settings.threadId} onChange={e => handleUpdateSettings({threadId: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
-            </div>
-        </div>
-
-
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-          <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Dvach Authentication</h3>
-          <div>
-            <label htmlFor="settingsPurchasedPasscode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Purchased Passcode:</label>
-            <input 
-              id="settingsPurchasedPasscode" 
-              type="password" 
-              value={settings.purchasedPasscode} 
-              onChange={e => handleUpdateSettings({ purchasedPasscode: e.target.value })} 
-              className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
-              autoComplete="new-password"
-            />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Required for posting and some bot functions.</p>
-          </div>
-        </div>
-
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-          <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Gemini API Configuration</h3>
-          <div>
-            <label htmlFor="geminiApiKeySource" className="block text-sm font-medium text-gray-700 dark:text-gray-300">API Key Source:</label>
-            <select id="geminiApiKeySource" value={settings.geminiApiKeySource} onChange={e => handleUpdateSettings({geminiApiKeySource: e.target.value as 'env' | 'user'})} className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500">
-              <option value="env">Environment Variable (VITE_GEMINI_API_KEY) {processEnvApiKey ? `(Detected: ${processEnvApiKey.substring(0,4)}...${processEnvApiKey.substring(processEnvApiKey.length - 4)})` : "(Not Detected/Accessible)"}</option>
-              <option value="user">Enter API Key Manually</option>
-            </select>
-          </div>
-          {settings.geminiApiKeySource === 'user' && (
-            <div className="mt-3">
-              <label htmlFor="userGeminiApiKey" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Manual Gemini API Key:</label>
-              <input 
-                id="userGeminiApiKey" 
-                type="password" 
-                placeholder="Enter your Gemini API Key" 
-                value={settings.userGeminiApiKey} 
-                onChange={e => handleUpdateSettings({userGeminiApiKey: e.target.value})} 
-                className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
-                autoComplete="new-password"
-              />
-            </div>
-          )}
-        </div>
-        
-         <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-          <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">User Agent</h3>
+  const renderSettingsPanel = () => (
+     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
+      <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Application Settings</h2>
+      
+      <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Global Dvach Settings</summary>
+        <div className="mt-3 space-y-3">
             <div>
-                <label htmlFor="settingsUserAgent" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Current User Agent:</label>
-                <textarea id="settingsUserAgent" value={settings.userAgent} onChange={e => handleUpdateSettings({ userAgent: e.target.value })} rows={2} className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500 font-mono text-xs"/>
-                <button onClick={() => handleUpdateSettings({ userAgent: generateUserAgent() })} className="mt-2 px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded-md shadow transition-colors">
-                    <IconRefresh className="inline mr-1 h-4 w-4"/> Regenerate
-                </button>
+              <label htmlFor="settingsBoard" className="block text-sm font-medium">Default Board (for Manual Ops):</label>
+              <input id="settingsBoard" type="text" value={settings.board} onChange={e => handleUpdateSettings({board: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <div>
+              <label htmlFor="settingsThreadId" className="block text-sm font-medium">Default Thread ID (for Manual Ops, 0 for new):</label>
+              <input id="settingsThreadId" type="text" value={settings.threadId} onChange={e => handleUpdateSettings({threadId: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <div>
+              <label htmlFor="settingsPasscode" className="block text-sm font-medium">Purchased Passcode (for Dvach Login):</label>
+              <input id="settingsPasscode" type="password" value={settings.purchasedPasscode} onChange={e => handleUpdateSettings({purchasedPasscode: e.target.value})} autoComplete="new-password" placeholder="Enter your Dvach Passcode" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <div>
+                <label htmlFor="settingsUserAgent" className="block text-sm font-medium">User Agent:</label>
+                <input id="settingsUserAgent" type="text" value={settings.userAgent} onChange={e => handleUpdateSettings({userAgent: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+                <button onClick={() => handleUpdateSettings({userAgent: generateUserAgent()})} className="mt-1 text-xs px-2 py-1 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 rounded">Generate New</button>
             </div>
         </div>
+      </details>
 
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-          <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Proxy Configuration</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Serverless functions (`/api/*`) are used for posting and potentially thread data fetching, bypassing these client-side GET proxies for those operations. These settings primarily affect direct client-side fetching of images or thread data if 'vercel_serverless' is not chosen for thread GETs.</p>
-          
-          <div className="space-y-4">
+      <details className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">CORS Proxy Configuration (for Client-Side GET Requests)</summary>
+        <div className="mt-3 space-y-3">
+            <p className="text-xs text-gray-500 dark:text-gray-400">These settings apply to client-side GET requests (e.g., fetching images for analysis, or thread data if not using serverless). POSTs to Dvach always use serverless functions.</p>
             <div>
-              <label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Thread Data (GET):</label>
-              <select 
-                id="settingsProxyModeForGET" 
-                value={settings.proxyModeForGET} 
-                onChange={e => {
-                    const mode = e.target.value as ProxyModeForGET;
-                    let url = settings.customProxyUrlForGET;
-                    if(mode === 'custom_cors_anywhere' && (url === "" || url === PROXY_URL_GO_X2U_BASE || url === PROXY_URL_CODETABS_BASE)) url = DEFAULT_CORS_ANYWHERE_PROXY;
-                    else if(mode === 'custom_go_x2u' && (url === "" || url === DEFAULT_CORS_ANYWHERE_PROXY || url === PROXY_URL_CODETABS_BASE)) url = PROXY_URL_GO_X2U_BASE;
-                    else if(mode === 'custom_codetabs' && (url === "" || url === DEFAULT_CORS_ANYWHERE_PROXY || url === PROXY_URL_GO_X2U_BASE)) url = PROXY_URL_CODETABS_BASE;
-                    handleUpdateSettings({ proxyModeForGET: mode, customProxyUrlForGET: url });
-                }}
-                className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
-              >
+              <label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium">Proxy for Thread Data GETs (if not Serverless):</label>
+              <select id="settingsProxyModeForGET" value={settings.proxyModeForGET} onChange={e => handleUpdateSettings({proxyModeForGET: e.target.value as ProxyModeForGET})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
                 <option value="vercel_serverless">Vercel Serverless Function (/api/get-thread) (Recommended)</option>
-                <option value="custom_cors_anywhere">Custom CORS-Anywhere like Proxy</option>
-                <option value="custom_go_x2u">Custom Go.x2u.in like Proxy</option>
-                <option value="custom_codetabs">Custom CodeTabs API like Proxy</option>
+                <option value="custom_cors_anywhere">Custom CORS Anywhere Style (Prefix)</option>
+                <option value="custom_go_x2u">Custom go.x2u.in Style (URL as param)</option>
+                <option value="custom_codetabs">Custom CodeTabs Style (URL as param, no http)</option>
                 <option value="custom_general_prefix">Custom General Prefix Proxy</option>
-                <option value="custom_general_param">Custom General Parameter Proxy</option>
-                <option value="none">No Proxy (Direct Fetch - Not Recommended)</option>
+                <option value="custom_general_param">Custom General Parameter Proxy (e.g., ?url=)</option>
+                <option value="none">No Proxy (May not work)</option>
               </select>
-              {isCustomUrlForGetEditable && (
-                 <input 
-                  type="text" 
-                  placeholder="Enter Custom Proxy URL for Thread Data"
-                  value={settings.customProxyUrlForGET} 
-                  onChange={e => handleUpdateSettings({ customProxyUrlForGET: e.target.value })} 
-                  className="mt-2 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
-                />
+              {settings.proxyModeForGET !== 'vercel_serverless' && settings.proxyModeForGET !== 'none' && (
+                <input type="text" placeholder="Custom Proxy URL for Thread Data" value={settings.customProxyUrlForGET} onChange={e => handleUpdateSettings({customProxyUrlForGET: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
               )}
             </div>
-
             <div>
-              <label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Images/Media (GET):</label>
-              <select 
-                id="settingsProxyModeForImagesGET" 
-                value={settings.proxyModeForImagesGET} 
-                onChange={e => {
-                    const mode = e.target.value as ProxyModeForGET;
-                    let url = settings.customProxyUrlForImagesGET;
-                    if(mode === 'custom_cors_anywhere' && (url === "" || url === PROXY_URL_GO_X2U_BASE || url === PROXY_URL_CODETABS_BASE)) url = DEFAULT_CORS_ANYWHERE_PROXY;
-                    else if(mode === 'custom_go_x2u' && (url === "" || url === DEFAULT_CORS_ANYWHERE_PROXY || url === PROXY_URL_CODETABS_BASE)) url = PROXY_URL_GO_X2U_BASE;
-                    else if(mode === 'custom_codetabs' && (url === "" || url === DEFAULT_CORS_ANYWHERE_PROXY || url === PROXY_URL_GO_X2U_BASE)) url = PROXY_URL_CODETABS_BASE;
-                    handleUpdateSettings({ proxyModeForImagesGET: mode, customProxyUrlForImagesGET: url });
-                }}
-                className="mt-1 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="custom_codetabs">Custom CodeTabs API like Proxy (Default for Images)</option>
-                <option value="custom_cors_anywhere">Custom CORS-Anywhere like Proxy</option>
-                <option value="custom_go_x2u">Custom Go.x2u.in like Proxy</option>
+              <label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium">Proxy for Image/Media GETs:</label>
+               <select id="settingsProxyModeForImagesGET" value={settings.proxyModeForImagesGET} onChange={e => handleUpdateSettings({proxyModeForImagesGET: e.target.value as ProxyModeForGET})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
+                <option value="custom_codetabs">CodeTabs Style (Default for Images)</option>
+                <option value="custom_cors_anywhere">CORS Anywhere Style (Prefix)</option>
+                <option value="custom_go_x2u">go.x2u.in Style (URL as param)</option>
                 <option value="custom_general_prefix">Custom General Prefix Proxy</option>
-                <option value="custom_general_param">Custom General Parameter Proxy</option>
-                <option value="none">No Proxy (Direct Fetch - May fail for cross-origin images)</option>
-                 <option value="vercel_serverless" disabled>Vercel Serverless (Not applicable for direct image fetches)</option>
+                <option value="custom_general_param">Custom General Parameter Proxy (e.g., ?url=)</option>
+                <option value="none">No Proxy (May not work)</option>
               </select>
-              {isCustomUrlForImagesEditable && (
-                <input 
-                  type="text" 
-                  placeholder="Enter Custom Proxy URL for Images"
-                  value={settings.customProxyUrlForImagesGET} 
-                  onChange={e => handleUpdateSettings({ customProxyUrlForImagesGET: e.target.value })} 
-                  className="mt-2 w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"
-                />
+              {settings.proxyModeForImagesGET !== 'none' && (
+                 <input type="text" placeholder="Custom Proxy URL for Images" value={settings.customProxyUrlForImagesGET} onChange={e => handleUpdateSettings({customProxyUrlForImagesGET: e.target.value})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
               )}
             </div>
-          </div>
         </div>
+      </details>
 
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-            <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Global Gemini Interaction Settings</h3>
-            <div className="space-y-3">
-                <label className="flex items-center">
-                    <input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({ geminiReplyWithGeneratedImage: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Gemini: Generate image with replies (Manual & Bot)</span>
-                </label>
-                <div>
-                    <label htmlFor="maxImagesToAnalyzePerPost" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Max images to analyze per post (Manual & Bot):</label>
-                    <input id="maxImagesToAnalyzePerPost" type="number" step="1" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e => handleUpdateSettings({ maxImagesToAnalyzePerPost: parseInt(e.target.value,10) || 0 })} className="mt-1 w-full md:w-1/3 p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500"/>
-                </div>
-                 <label className="flex items-center">
-                    <input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({ geminiAnalyzeOpMedia: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Manual Reply: Analyze media in OP post</span>
-                </label>
-                <label className="flex items-center">
-                    <input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e => handleUpdateSettings({ geminiAnalyzeAnonMedia: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Manual Reply: Analyze media in non-OP (anonymous) posts</span>
-                </label>
-            </div>
-        </div>
-
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-            <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Autonomous Bot Settings</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label htmlFor="botTargetBoard" className="block text-sm font-medium">Target Board:</label>
-                    <input id="botTargetBoard" type="text" value={settings.autonomousBotTargetBoard} onChange={e => handleUpdateSettings({ autonomousBotTargetBoard: e.target.value })} className="mt-1 w-full p-2 input-style"/>
-                </div>
-                <div>
-                    <label htmlFor="botTargetThreadId" className="block text-sm font-medium">Target Thread ID:</label>
-                    <input id="botTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({ autonomousBotTargetThreadId: e.target.value })} className="mt-1 w-full p-2 input-style"/>
-                </div>
-            </div>
-            <div className="mt-3">
-                <label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & Style):</label>
-                <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({ autonomousBotSystemPrompt: e.target.value })} rows={4} className="mt-1 w-full p-2 input-style font-mono text-xs"/>
-            </div>
-             <div className="mt-3">
-                <label htmlFor="botInitialContextScope" className="block text-sm font-medium">Autonomous Bot: Initial Thread Context Scope:</label>
-                <select id="botInitialContextScope" value={settings.autonomousBotInitialContextScope} onChange={e => handleUpdateSettings({autonomousBotInitialContextScope: e.target.value as AutonomousBotInitialContextScope})} className="mt-1 w-full p-2 input-style">
-                    <option value="op_only">OP Post Only (Default)</option>
-                    <option value="full_thread">Full Thread Summary</option>
+      <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Gemini API & Model Settings</summary>
+        <div className="mt-3 space-y-3">
+            <div>
+                <label className="block text-sm font-medium">Gemini API Key Source:</label>
+                <select aria-label="Gemini API Key Source" value={settings.geminiApiKeySource} onChange={e => handleUpdateSettings({geminiApiKeySource: e.target.value as 'env' | 'user'})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
+                  <option value="env">Use Environment API_KEY {processEnvApiKey ? `(Detected: ${processEnvApiKey.substring(0,4)}...${processEnvApiKey.substring(processEnvApiKey.length - 4)})` : "(Not Detected/Accessible)"}</option>
+                  <option value="user">Enter API Key Manually</option>
                 </select>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Determines how much of the thread is initially fed to Gemini for context.</p>
-            </div>
-             <div className="mt-3">
-                <label htmlFor="autonomousBotFullThreadContextMaxChars" className="block text-sm font-medium">Autonomous Bot: Full Thread Context Max Chars:</label>
-                <input 
-                    id="autonomousBotFullThreadContextMaxChars" 
-                    type="number" 
-                    step="500" 
-                    min="500"
-                    max="50000" 
-                    value={settings.autonomousBotFullThreadContextMaxChars} 
-                    onChange={e => handleUpdateSettings({ autonomousBotFullThreadContextMaxChars: parseInt(e.target.value,10) || 500 })} 
-                    className="mt-1 w-full md:w-1/3 p-2 input-style"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Max characters for "Full Thread Summary" context. Default: 5000.</p>
-            </div>
-             <div className="mt-3">
-                <label htmlFor="botReplyMode" className="block text-sm font-medium">Bot Reply Mode:</label>
-                <select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e => handleUpdateSettings({autonomousBotReplyMode: e.target.value as AutonomousBotReplyMode})} className="mt-1 w-full p-2 input-style">
-                    <option value="random_in_thread">Randomly reply to posts in thread</option>
-                    <option value="replies_to_bot">Reply to posts that mention/reply to the bot (WIP)</option>
-                </select>
-            </div>
-            <div className="mt-3">
-                <label htmlFor="botCycleInterval" className="block text-sm font-medium">Bot Cycle Interval (seconds):</label>
-                <input id="botCycleInterval" type="number" step="5" min="30" value={settings.autonomousBotCycleIntervalSeconds} onChange={e => handleUpdateSettings({ autonomousBotCycleIntervalSeconds: parseInt(e.target.value,10) || 30 })} className="mt-1 w-full md:w-1/3 p-2 input-style"/>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Increase if "posting too fast" errors occur often.</p>
-            </div>
-            <div className="mt-3 space-y-2">
-                 <label className="flex items-center">
-                    <input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e => handleUpdateSettings({ botAnalyzesImagesInTriggerPosts: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Bot: Analyze images in posts it replies to</span>
-                </label>
-                <label className="flex items-center">
-                    <input type="checkbox" checked={settings.autonomousBotAllowReplyToSelf} onChange={e => handleUpdateSettings({ autonomousBotAllowReplyToSelf: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Bot: Allow replying to its own previous posts</span>
-                </label>
-            </div>
-        </div>
-        
-        <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-            <h3 className="text-xl font-semibold mb-3 text-gray-700 dark:text-gray-300">Gemini Model Parameters (Manual Reply / Advanced)</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">These settings primarily affect the "Reply with Gemini" button in the thread viewer. The autonomous bot may use its own optimized settings or ones defined in its system prompt.</p>
-            <div className="space-y-3">
-                <div>
-                    <label htmlFor="geminiSystemInstruction" className="block text-sm font-medium">System Instruction (Manual Reply):</label>
-                    <textarea id="geminiSystemInstruction" value={settings.geminiSystemInstruction} onChange={e => handleUpdateSettings({ geminiSystemInstruction: e.target.value })} rows={3} className="mt-1 w-full p-2 input-style"/>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                        <label htmlFor="geminiTemperature" className="block text-sm font-medium">Temperature:</label>
-                        <input id="geminiTemperature" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({ geminiTemperature: parseFloat(e.target.value) })} className="mt-1 w-full p-2 input-style"/>
-                    </div>
-                    <div>
-                        <label htmlFor="geminiTopP" className="block text-sm font-medium">Top P:</label>
-                        <input id="geminiTopP" type="number" step="0.01" min="0" max="1" value={settings.geminiTopP} onChange={e => handleUpdateSettings({ geminiTopP: parseFloat(e.target.value) })} className="mt-1 w-full p-2 input-style"/>
-                    </div>
-                    <div>
-                        <label htmlFor="geminiTopK" className="block text-sm font-medium">Top K:</label>
-                        <input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({ geminiTopK: parseInt(e.target.value,10) || 1 })} className="mt-1 w-full p-2 input-style"/>
-                    </div>
-                    <div>
-                        <label htmlFor="geminiMaxOutputTokens" className="block text-sm font-medium">Max Output Tokens:</label>
-                        <input id="geminiMaxOutputTokens" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({ geminiMaxOutputTokens: parseInt(e.target.value,10) || 64 })} className="mt-1 w-full p-2 input-style"/>
-                    </div>
-                </div>
-                 <div>
-                    <label htmlFor="geminiResponseMimeType" className="block text-sm font-medium">Response MIME Type (Manual Reply):</label>
-                    <select id="geminiResponseMimeType" value={settings.geminiResponseMimeType} onChange={e => handleUpdateSettings({geminiResponseMimeType: e.target.value as 'text/plain' | 'application/json'})} className="mt-1 w-full p-2 input-style">
-                        <option value="text/plain">text/plain</option>
-                        <option value="application/json">application/json (Ensure prompt requests JSON for manual replies)</option>
-                    </select>
-                </div>
-                <label className="flex items-center">
-                    <input type="checkbox" checked={settings.useSearchGrounding} onChange={e => handleUpdateSettings({ useSearchGrounding: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Use Google Search Grounding (Manual Reply, text model only, check docs for compatibility)</span>
-                </label>
-                <label className="flex items-center">
-                    <input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({ useThinkingBudget: e.target.checked })} className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-2"/>
-                    <span>Use Thinking Budget (Disable for low latency, e.g. set budget to 0)</span>
-                </label>
-                {settings.useThinkingBudget && (
-                     <div>
-                        <label htmlFor="geminiThinkingBudget" className="block text-sm font-medium">Thinking Budget (0-1000ms, 0 to disable thinking):</label>
-                        <input id="geminiThinkingBudget" type="number" step="50" min="0" max="1000" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({ geminiThinkingBudget: parseInt(e.target.value,10) || 0 })} className="mt-1 w-full md:w-1/3 p-2 input-style"/>
-                    </div>
+                {settings.geminiApiKeySource === 'user' && (
+                  <input aria-label="User Gemini API Key" type="password" placeholder="Enter your Gemini API Key" value={settings.userGeminiApiKey} onChange={e => handleUpdateSettings({userGeminiApiKey: e.target.value})} autoComplete="new-password" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
                 )}
             </div>
+            <label className="flex items-center">
+              <input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({geminiAnalyzeOpMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+              Gemini: Analyze Media in OP Posts (Manual Reply)
+            </label>
+            <label className="flex items-center">
+              <input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e => handleUpdateSettings({geminiAnalyzeAnonMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+              Gemini: Analyze Media in Anonymous Posts (Manual Reply)
+            </label>
+            <label className="flex items-center">
+              <input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e => handleUpdateSettings({geminiReplyWithGeneratedImage: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+              Gemini: Generate image with replies (Manual & Bot)
+            </label>
+             <div>
+                <label htmlFor="maxImagesToAnalyzePerPost" className="block text-sm font-medium">Max Images to Analyze per Post (Manual & Bot):</label>
+                <input id="maxImagesToAnalyzePerPost" type="number" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e => handleUpdateSettings({maxImagesToAnalyzePerPost: parseInt(e.target.value)})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+
+            <h4 className="text-md font-medium pt-2 text-gray-700 dark:text-gray-300">Gemini Model Config (Manual Replies)</h4>
+            <div>
+                <label htmlFor="geminiSystemInstructionManual" className="block text-sm font-medium">System Instruction (Manual Replies):</label>
+                <textarea id="geminiSystemInstructionManual" value={settings.geminiSystemInstruction} onChange={e => handleUpdateSettings({geminiSystemInstruction: e.target.value})} rows={2} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+                <div><label htmlFor="geminiTemp" className="text-sm">Temperature:</label><input id="geminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({geminiTemperature: parseFloat(e.target.value)})} className="w-full p-1 border r"/></div>
+                <div><label htmlFor="geminiTopP" className="text-sm">Top P:</label><input id="geminiTopP" type="number" step="0.05" min="0" max="1" value={settings.geminiTopP} onChange={e => handleUpdateSettings({geminiTopP: parseFloat(e.target.value)})} className="w-full p-1 border r"/></div>
+                <div><label htmlFor="geminiTopK" className="text-sm">Top K:</label><input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({geminiTopK: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>
+                <div><label htmlFor="geminiMaxOut" className="text-sm">Max Output Tokens:</label><input id="geminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({geminiMaxOutputTokens: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>
+            </div>
+            <div>
+                <label htmlFor="geminiMime" className="block text-sm">Response MIME Type:</label>
+                <select id="geminiMime" value={settings.geminiResponseMimeType} onChange={e => handleUpdateSettings({geminiResponseMimeType: e.target.value as 'text/plain' | 'application/json'})} className="w-full p-2 border r">
+                    <option value="text/plain">text/plain</option>
+                    <option value="application/json">application/json</option>
+                </select>
+            </div>
+            <label className="flex items-center"><input type="checkbox" checked={settings.useSearchGrounding} onChange={e => handleUpdateSettings({useSearchGrounding: e.target.checked})} className="mr-2"/> Use Google Search Grounding (Manual)</label>
+            <label className="flex items-center"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({useThinkingBudget: e.target.checked})} className="mr-2"/> Use Thinking Budget (Manual, 0=disable)</label>
+            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm">Thinking Budget (Manual, 0-1):</label><input id="geminiThinkBudget" type="number" step="0.05" min="0" max="1" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseFloat(e.target.value)})} className="w-full p-1 border r"/></div>}
         </div>
+      </details>
 
-
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-6 text-center">Settings are saved automatically to local storage. Version: {APP_VERSION} &copy; {currentYear}</p>
-      </div>
-    );
-  };
+       <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Autonomous Bot Settings</summary>
+        <div className="mt-3 space-y-3">
+            <div>
+                <label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & Style):</label>
+                <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({autonomousBotSystemPrompt: e.target.value})} rows={3} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <label className="flex items-center">
+              <input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e => handleUpdateSettings({botAnalyzesImagesInTriggerPosts: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+              Bot: Analyze Images in Trigger Posts
+            </label>
+            <div>
+                <label htmlFor="botReplyMode" className="block text-sm">Bot Reply Mode:</label>
+                <select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e => handleUpdateSettings({autonomousBotReplyMode: e.target.value as AutonomousBotReplyMode})} className="w-full p-2 border r">
+                    <option value="random_in_thread">Random Post in Thread</option>
+                    <option value="replies_to_bot">Replies to Bot's Own Posts (WIP)</option>
+                </select>
+            </div>
+             <div>
+                <label htmlFor="botInterval" className="block text-sm font-medium">Bot Cycle Interval (seconds):</label>
+                <input id="botInterval" type="number" min="10" value={settings.autonomousBotCycleIntervalSeconds} onChange={e => handleUpdateSettings({autonomousBotCycleIntervalSeconds: parseInt(e.target.value)})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+            </div>
+            <label className="flex items-center">
+              <input type="checkbox" checked={settings.autonomousBotAllowReplyToSelf} onChange={e => handleUpdateSettings({autonomousBotAllowReplyToSelf: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+              Bot: Allow Reply to Own Posts (if eligible)
+            </label>
+             <div>
+                <label htmlFor="botInitialContextScope" className="block text-sm">Bot: Initial Thread Context Scope:</label>
+                <select id="botInitialContextScope" value={settings.autonomousBotInitialContextScope} onChange={e => handleUpdateSettings({autonomousBotInitialContextScope: e.target.value as AutonomousBotInitialContextScope})} className="w-full p-2 border r">
+                    <option value="op_only">OP Post Only</option>
+                    <option value="full_thread">Full Thread Summary</option>
+                </select>
+            </div>
+            {settings.autonomousBotInitialContextScope === 'full_thread' && (
+                <div>
+                    <label htmlFor="botFullContextChars" className="block text-sm font-medium">Bot: Full Thread Context Max Chars (0 for unlimited):</label>
+                    <input id="botFullContextChars" type="number" min="0" step="1000" value={settings.autonomousBotFullThreadContextMaxChars} onChange={e => handleUpdateSettings({autonomousBotFullThreadContextMaxChars: parseInt(e.target.value)})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+                </div>
+            )}
+        </div>
+      </details>
+      <p className="text-xs text-gray-500 dark:text-gray-400">Settings are saved automatically to local storage.</p>
+    </div>
+  );
 
   const renderLogsPanel = () => (
-    <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-xl rounded-lg">
-      <div className="flex justify-between items-center border-b-2 pb-3 border-gray-300 dark:border-gray-700">
-        <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-200">Event Logs</h2>
+    <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700 flex-grow">Event Logs</h2>
         <button 
-            onClick={() => { if(window.confirm("Are you sure you want to clear all logs?")) setLogs([]); }}
-            className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-md font-medium flex items-center shadow-md disabled:opacity-50 transition-colors"
+            onClick={() => setLogs([])}
+            className="px-3 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded-md font-medium flex items-center shadow disabled:opacity-50 transition-colors"
             title="Clear all logs"
             disabled={logs.length === 0}
         >
-            <IconTrash className="mr-2 h-5 w-5"/> Clear Logs
+            <IconTrash className="mr-1 h-4 w-4"/> Clear Logs
         </button>
       </div>
-      <div className="max-h-[70vh] overflow-y-auto bg-gray-50 dark:bg-gray-900/70 p-3 rounded-md custom-scrollbar border border-gray-200 dark:border-gray-700 shadow-inner">
-        {logs.length === 0 && <p className="text-center text-gray-500 dark:text-gray-400 py-10">No logs yet. Interact with the app to generate logs.</p>}
-        {logs.map(log => {
-          let bgColor, textColor, borderColorClass;
-          switch(log.type) {
-            case 'error': case 'bot_error': bgColor = 'bg-red-100 dark:bg-red-900'; textColor = 'text-red-800 dark:text-red-200'; borderColorClass = 'border-red-500'; break;
-            case 'success': bgColor = 'bg-green-100 dark:bg-green-900'; textColor = 'text-green-800 dark:text-green-200'; borderColorClass = 'border-green-500'; break;
-            case 'warning': case 'bot_warning': bgColor = 'bg-yellow-100 dark:bg-yellow-800'; textColor = 'text-yellow-800 dark:text-yellow-200'; borderColorClass = 'border-yellow-500'; break;
-            case 'gemini': bgColor = 'bg-purple-100 dark:bg-purple-900'; textColor = 'text-purple-800 dark:text-purple-200'; borderColorClass = 'border-purple-500'; break;
-            case 'dvach': case 'auth': bgColor = 'bg-blue-100 dark:bg-blue-900'; textColor = 'text-blue-800 dark:text-blue-200'; borderColorClass = 'border-blue-500'; break;
-            case 'bot_activity': case 'bot_setup': bgColor = 'bg-teal-100 dark:bg-teal-900'; textColor = 'text-teal-800 dark:text-teal-200'; borderColorClass = 'border-teal-500'; break;
-            default: bgColor = 'bg-gray-100 dark:bg-gray-700'; textColor = 'text-gray-800 dark:text-gray-200'; borderColorClass = 'border-gray-500';
-          }
-          const logDataString = formatLogDataForDisplay(log.data);
-          return (
-            <div key={log.id} className={`text-xs p-2 mb-1.5 rounded-md border-l-4 ${borderColorClass} ${bgColor} ${textColor} shadow-sm font-mono`}>
-              <span className="font-semibold">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
-              {log.data ? (
-                <pre className="mt-1 text-xs whitespace-pre-wrap bg-black/5 dark:bg-black/20 p-1.5 rounded-sm overflow-x-auto custom-scrollbar-thin">
-                  {logDataString}
-                </pre>
-              ) : null}
-            </div>
-          );
-        })}
+      <div className="max-h-[600px] overflow-y-auto bg-gray-50 dark:bg-gray-900 p-3 rounded custom-scrollbar border border-gray-200 dark:border-gray-700">
+        {logs.length === 0 && <p className="text-center text-gray-500 dark:text-gray-400">No logs yet.</p>}
+        {logs.map(log => (
+          <div key={log.id} className={`text-xs p-1.5 mb-1 rounded border-l-4 ${
+            log.type === 'error' || log.type === 'bot_error' ? 'bg-red-50 dark:bg-red-900/50 border-red-500 text-red-700 dark:text-red-200' : 
+            log.type === 'success' ? 'bg-green-50 dark:bg-green-900/50 border-green-500 text-green-700 dark:text-green-200' :
+            log.type === 'warning' || log.type === 'bot_warning' ? 'bg-yellow-50 dark:bg-yellow-900/50 border-yellow-500 text-yellow-700 dark:text-yellow-200' :
+            log.type === 'gemini' ? 'bg-purple-50 dark:bg-purple-900/50 border-purple-500 text-purple-700 dark:text-purple-200' :
+            log.type === 'dvach' ? 'bg-blue-50 dark:bg-blue-900/50 border-blue-500 text-blue-700 dark:text-blue-200' :
+            log.type === 'auth' ? 'bg-cyan-50 dark:bg-cyan-900/50 border-cyan-500 text-cyan-700 dark:text-cyan-200' :
+            log.type === 'bot_activity' || log.type === 'bot_setup' ? 'bg-indigo-50 dark:bg-indigo-900/50 border-indigo-500 text-indigo-700 dark:text-indigo-200' :
+            'bg-gray-100 dark:bg-gray-700/50 border-gray-500 text-gray-700 dark:text-gray-300' 
+          }`}>
+            <span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
+            {log.data && <pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-600 p-1 rounded overflow-x-auto">{formatLogDataForDisplay(log.data)}</pre>}
+          </div>
+        ))}
       </div>
     </div>
   );
   
+  // Main App Return
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 font-sans">
       <header className="bg-white dark:bg-gray-800 shadow-md p-4 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">Dvach Gemini Bot <span className="text-xs align-super">v{APP_VERSION}</span></h1>
+          <h1 className="text-2xl font-bold text-blue-600 dark:text-blue-400">Dvach Gemini Bot</h1>
           <div className="flex items-center space-x-4">
-            {settings.userAgent && <span className="text-xs text-gray-500 dark:text-gray-400 hidden md:block" title={settings.userAgent}>UA: {settings.userAgent.length > 40 ? settings.userAgent.substring(0,40) + '...' : settings.userAgent}</span>}
+            {settings.userAgent && <span className="text-xs text-gray-500 dark:text-gray-400 hidden md:block truncate max-w-xs" title={settings.userAgent}>UA: {settings.userAgent.substring(0,40)}...</span>}
             <button
               onClick={toggleTheme}
               className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
               aria-label={`Toggle theme (current: ${settings.theme})`}
-              title={`Change theme. Current: ${settings.theme}. Click to cycle: light -> dark -> system -> light...`}
+              title={`Change theme. Current: ${settings.theme}. Click to cycle.`}
             >
               <ThemeIconComponent className="h-6 w-6" />
             </button>
@@ -1758,33 +1611,33 @@ useEffect(() => {
         </div>
       </header>
 
-      <nav className="bg-gray-50 dark:bg-gray-800/80 backdrop-blur-sm border-b border-t border-gray-200 dark:border-gray-700 sticky top-[72px] z-40"> 
+      <nav className="bg-gray-50 dark:bg-gray-800 border-b border-t border-gray-200 dark:border-gray-700 sticky top-[72px] z-40"> {/* Adjusted top value if header height changes */}
         <div className="container mx-auto flex justify-center sm:justify-start flex-wrap">
           {[
             { id: 'dvach', label: 'Manual Ops', icon: IconCpu },
             { id: 'bot_control', label: 'Autonomous Bot', icon: IconMessageChat },
             { id: 'settings', label: 'Settings', icon: IconSettings },
             { id: 'logs', label: 'Logs', icon: IconTerminal },
-          ].map((tab) => (
+          ].map((tabLink) => (
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as 'dvach' | 'bot_control' | 'settings' | 'logs')}
-              aria-current={activeTab === tab.id ? "page" : undefined}
-              className={`flex items-center px-3 sm:px-4 py-3 text-sm font-medium border-b-2 transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:z-10
-                ${activeTab === tab.id
-                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+              key={tabLink.id}
+              onClick={() => setActiveTab(tabLink.id as 'dvach' | 'bot_control' | 'settings' | 'logs')}
+              aria-current={activeTab === tabLink.id ? "page" : undefined}
+              className={`flex items-center px-2 sm:px-3 py-3 text-sm font-medium border-b-2 transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-400
+                ${activeTab === tabLink.id
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
                   : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'
                 }`}
             >
-              <tab.icon aria-hidden="true" className="h-5 w-5 mr-1.5 sm:mr-2 flex-shrink-0" />
-              <span className="truncate">{tab.label}</span>
+              <tabLink.icon aria-hidden="true" className="h-5 w-5 mr-1 sm:mr-1.5 flex-shrink-0" />
+              <span className="truncate">{tabLink.label}</span>
             </button>
           ))}
         </div>
       </nav>
 
       <main className="container mx-auto p-4 md:p-6" role="main">
-        <div className="mt-4">
+        <div className="mt-2"> 
             {activeTab === 'dvach' && renderDvachBotPanel()}
             {activeTab === 'bot_control' && renderAutonomousBotControlPanel()}
             {activeTab === 'settings' && renderSettingsPanel()}
@@ -1792,7 +1645,7 @@ useEffect(() => {
         </div>
       </main>
 
-      <footer className="text-center py-6 border-t border-gray-200 dark:border-gray-700 mt-10">
+      <footer className="text-center py-4 border-t border-gray-200 dark:border-gray-700 mt-8">
         <p className="text-xs text-gray-500 dark:text-gray-400">
           Dvach Gemini Bot Interface - Version {APP_VERSION} - Use responsibly.
         </p>
