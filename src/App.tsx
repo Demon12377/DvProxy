@@ -26,6 +26,7 @@ import {
   IconSun, IconMoon
 } from './components/Icons'; 
 
+// Ensure VITE_GEMINI_API_KEY is read correctly from import.meta.env
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 
