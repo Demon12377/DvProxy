@@ -1597,7 +1597,7 @@ useEffect(() => {
             'bg-gray-100 dark:bg-gray-700/50 border-gray-500 text-gray-700 dark:text-gray-300' 
           }`}>
             <span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
-            {log.data && <pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-600 p-1 rounded overflow-x-auto">{formatLogDataForDisplay(log.data)}</pre>}
+            {log.data && <pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-600 p-1 rounded overflow-x-auto">{formatLogDataForDisplay(log.data) as string}</pre>}
           </div>
         ))}
       </div>
