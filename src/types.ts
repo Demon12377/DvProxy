@@ -143,6 +143,10 @@ export type AutonomousBotReplyMode =
   | 'replies_to_bot' 
   | 'random_in_thread';
 
+export type AutonomousBotInitialContextScope = 
+  | 'op_only'
+  | 'full_thread';
+
 export interface AppSettings {
   // Global Dvach Settings (used by Manual Ops tab inputs primarily)
   board: string; 
@@ -181,6 +185,7 @@ export interface AppSettings {
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number; 
   autonomousBotAllowReplyToSelf: boolean; 
+  autonomousBotInitialContextScope: AutonomousBotInitialContextScope; // New setting
 
   // Gemini Model Configuration (mainly for manual replies; bot might use simplified or system prompt dictates style)
   geminiSystemInstruction: string; // For manual replies primarily
@@ -245,10 +250,10 @@ export interface GeminiDvachConversation {
   status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded' | 'context_built'; 
   initialContext?: { // Context built when conversation was initiated or reset for the thread
     opPostNum?: string;
-    opPostText?: string;
+    opPostText?: string; // If scope is 'op_only', this is OP text. If 'full_thread', this is the full summary.
     opPostImagePreviews?: string[]; 
-    opPostMediaParts?: Part[]; // Cached media parts from OP post
-    precedingPostsText?: string[]; // Text of posts right before the trigger (if applicable)
+    opPostMediaParts?: Part[]; // Cached media parts from OP post (always OP, regardless of scope)
+    precedingPostsText?: string[]; // Text of posts right before the trigger (if applicable, less used with new context logic)
     targetPostText?: string; // Text of the triggerPostNum itself (if not OP)
     targetPostImagePreviews?: string[]; 
   };
