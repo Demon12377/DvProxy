@@ -1,3 +1,4 @@
+
 // api/dvach-post/index.js
 import formidable from 'formidable';
 import fs from 'fs';
@@ -114,14 +115,14 @@ export default async function handler(req, res) {
     const dvachPostRequestHeaders = {
       ...dvachPostFormData.getHeaders(), 
       'Cookie': cookieHeader, 
-      'Accept': 'application/json, text/plain, */*', 
+      'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'User-Agent': clientUserAgent,
       'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
       'Referer': `${DVACH_BASE_URL}/${board}/`,
       'Origin': DVACH_BASE_URL,
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
       'Sec-Fetch-Site': 'same-origin',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Dest': 'empty',
     };
     
     console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach: ${dvachPostUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);
@@ -151,6 +152,8 @@ export default async function handler(req, res) {
       if (!dvachPostResponse.ok) {
         return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach (non-JSON), status ${dvachPostResponse.status}` } });
       }
+      // If response is OK but not JSON, it might be a redirect or an unexpected success page.
+      // It's safer to assume success if status is OK and let the client figure out the post number if missing.
       return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach, but response was not valid JSON. Check Dvach manually for post.", rawResponsePreview: dvachPostResponseText.substring(0,200), num: Date.now().toString() });
     }
 

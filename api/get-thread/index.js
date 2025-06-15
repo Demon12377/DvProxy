@@ -1,3 +1,4 @@
+
 // api/get-thread/index.js
 import fetch from 'node-fetch';
 
@@ -8,10 +9,11 @@ export default async function handler(req, res) {
   const timestamp = new Date().toISOString();
   console.log(`${timestamp} [api/get-thread] Request received. Method: ${req.method}, URL: ${req.url}`);
 
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent'); 
+
   if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent'); 
     return res.status(200).json({ message: 'CORS preflight successful for /api/get-thread' });
   }
 
@@ -36,9 +38,13 @@ export default async function handler(req, res) {
     const dvachResponse = await fetch(dvachUrl, {
       headers: {
         'User-Agent': clientUserAgent, 
-        'Accept': 'application/json, text/plain, */*',
+        'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
-        'Referer': `${DVACH_BASE_URL}/${board}/`, // Add Referer
+        'Referer': `${DVACH_BASE_URL}/${board}/`,
+        'Origin': DVACH_BASE_URL,
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
       }
     });
 
@@ -48,11 +54,9 @@ export default async function handler(req, res) {
       console.error(`${timestamp} [api/get-thread] Error from Dvach API. Status: ${dvachResponse.status}. URL: ${dvachUrl}. Response: ${responseBodyText.substring(0, 500)}`);
       try {
         const errorJson = JSON.parse(responseBodyText);
-        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Content-Type', 'application/json');
         return res.status(dvachResponse.status).json(errorJson);
       } catch (e) {
-        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Content-Type', 'application/json'); 
         return res.status(dvachResponse.status).json({ error: { code: dvachResponse.status, message: `Dvach API error: ${responseBodyText.substring(0, 200)}` }});
       }
@@ -63,19 +67,15 @@ export default async function handler(req, res) {
         threadData = JSON.parse(responseBodyText);
     } catch(e) {
         console.error(`${timestamp} [api/get-thread] Dvach response was OK but not valid JSON. URL: ${dvachUrl}. Response: ${responseBodyText.substring(0,500)}`);
-        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Content-Type', 'application/json');
         return res.status(500).json({ error: { code: 500, message: `Dvach returned OK but response was not valid JSON. ${responseBodyText.substring(0,200)}`}});
     }
     
-
-    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json');
     return res.status(200).json(threadData);
 
   } catch (error) {
     console.error(`${timestamp} [api/get-thread] Internal server error:`, error);
-    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json');
     return res.status(500).json({ error: { code: 500, message: `Internal server error in /api/get-thread: ${error.message}` } });
   }

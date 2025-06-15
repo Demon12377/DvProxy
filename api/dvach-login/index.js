@@ -1,3 +1,4 @@
+
 // api/dvach-login/index.js
 import fetch from 'node-fetch';
 import FormDataNode from 'form-data'; // Using FormData for Node.js environment
@@ -38,11 +39,9 @@ export default async function handler(req, res) {
     let purchasedPasscode;
     const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS;
 
-    // Ensure body is parsed as JSON
     if (req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
         purchasedPasscode = req.body.purchased_passcode;
     } else {
-        // If not JSON, try to parse it as such, assuming it might be sent incorrectly
         let body = '';
         for await (const chunk of req) { body += chunk; }
         try {
@@ -71,13 +70,13 @@ export default async function handler(req, res) {
     const dvachRequestHeaders = {
       ...loginFormData.getHeaders(), 
       'User-Agent': clientUserAgent,
-      'Accept': 'application/json, text/plain, */*',
+      'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
       'Referer': `${DVACH_BASE_URL}/`,
       'Origin': DVACH_BASE_URL,
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
       'Sec-Fetch-Site': 'same-origin',
+      'Sec-Fetch-Mode': 'cors', // 'navigate' could also be an option for login, but 'cors' is generally safer for API-like interaction
+      'Sec-Fetch-Dest': 'empty', // 'document' for login page navigation, 'empty' for fetch/XHR
     };
 
     try {
