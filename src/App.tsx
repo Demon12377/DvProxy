@@ -1,4 +1,3 @@
-
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -13,7 +12,7 @@ import {
   DvachThreadResponse,
   DvachFile, GeminiDvachConversation, ChatMessage,
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
-  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata, FinishReason
+  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import {
@@ -33,18 +32,21 @@ import {
   IconSun, IconMoon, IconPhoto, IconFileText, IconClock
 } from './components/Icons';
 
-const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+// process.env.API_KEY is now directly available due to Vite's `define` config.
+// const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; // No longer used for API key logic
 
 interface BotReplySchema {
   replyText: string;
 }
+
+const envKeyIsAvailable = typeof process.env.API_KEY === 'string' && process.env.API_KEY.length > 0;
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   board: "b",
   threadId: "",
   purchasedPasscode: "",
 
-  geminiApiKeySource: processEnvApiKey ? 'env' : 'user',
+  geminiApiKeySource: envKeyIsAvailable ? 'env' : 'user',
   userGeminiApiKey: "",
 
   theme: 'system',
@@ -191,38 +193,49 @@ function parseGeminiJsonResponse<T>(responseText: string): T | null {
 
 const App: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(() => {
-    const savedSettings = localStorage.getItem(APP_SETTINGS_KEY);
-    const initialSettings = savedSettings ? JSON.parse(savedSettings) : {};
-    const mergedSettings: AppSettings = {
-        ...DEFAULT_APP_SETTINGS,
-        ...initialSettings,
-        maxImagesToAnalyzePerPost: initialSettings.maxImagesToAnalyzePerPost === undefined ? DEFAULT_APP_SETTINGS.maxImagesToAnalyzePerPost : Number(initialSettings.maxImagesToAnalyzePerPost),
-        autonomousBotCycleIntervalSeconds: initialSettings.autonomousBotCycleIntervalSeconds === undefined ? DEFAULT_APP_SETTINGS.autonomousBotCycleIntervalSeconds : Number(initialSettings.autonomousBotCycleIntervalSeconds),
-        autonomousBotFullThreadContextMaxChars: initialSettings.autonomousBotFullThreadContextMaxChars === undefined ? DEFAULT_APP_SETTINGS.autonomousBotFullThreadContextMaxChars : Number(initialSettings.autonomousBotFullThreadContextMaxChars),
-        geminiTemperature: initialSettings.geminiTemperature === undefined ? DEFAULT_APP_SETTINGS.geminiTemperature : Number(initialSettings.geminiTemperature),
-        geminiTopP: initialSettings.geminiTopP === undefined ? DEFAULT_APP_SETTINGS.geminiTopP : Number(initialSettings.geminiTopP),
-        geminiTopK: initialSettings.geminiTopK === undefined ? DEFAULT_APP_SETTINGS.geminiTopK : Number(initialSettings.geminiTopK),
-        geminiMaxOutputTokens: initialSettings.geminiMaxOutputTokens === undefined ? DEFAULT_APP_SETTINGS.geminiMaxOutputTokens : Number(initialSettings.geminiMaxOutputTokens),
-        geminiThinkingBudget: initialSettings.geminiThinkingBudget === undefined ? DEFAULT_APP_SETTINGS.geminiThinkingBudget : Number(initialSettings.geminiThinkingBudget),
-        geminiAnalyzeOpMedia: initialSettings.geminiAnalyzeOpMedia === undefined ? DEFAULT_APP_SETTINGS.geminiAnalyzeOpMedia : !!initialSettings.geminiAnalyzeOpMedia,
-        geminiAnalyzeAnonMedia: initialSettings.geminiAnalyzeAnonMedia === undefined ? DEFAULT_APP_SETTINGS.geminiAnalyzeAnonMedia : !!initialSettings.geminiAnalyzeAnonMedia,
-        geminiReplyWithGeneratedImage: initialSettings.geminiReplyWithGeneratedImage === undefined ? DEFAULT_APP_SETTINGS.geminiReplyWithGeneratedImage : !!initialSettings.geminiReplyWithGeneratedImage,
-        botAnalyzesImagesInTriggerPosts: initialSettings.botAnalyzesImagesInTriggerPosts === undefined ? DEFAULT_APP_SETTINGS.botAnalyzesImagesInTriggerPosts : !!initialSettings.botAnalyzesImagesInTriggerPosts,
-        autonomousBotAllowReplyToSelf: initialSettings.autonomousBotAllowReplyToSelf === undefined ? DEFAULT_APP_SETTINGS.autonomousBotAllowReplyToSelf : !!initialSettings.autonomousBotAllowReplyToSelf,
-        autonomousBotInitialContextScope: initialSettings.autonomousBotInitialContextScope || DEFAULT_APP_SETTINGS.autonomousBotInitialContextScope,
-        useSearchGrounding: initialSettings.useSearchGrounding === undefined ? DEFAULT_APP_SETTINGS.useSearchGrounding : !!initialSettings.useSearchGrounding,
-        useThinkingBudget: initialSettings.useThinkingBudget === undefined ? DEFAULT_APP_SETTINGS.useThinkingBudget : !!initialSettings.useThinkingBudget,
-        userAgent: initialSettings.userAgent || generateUserAgent(),
-        geminiSafetySettings: initialSettings.geminiSafetySettings || DEFAULT_GEMINI_SAFETY_SETTINGS,
-        autonomousBotMinReplyDelayMs: initialSettings.autonomousBotMinReplyDelayMs === undefined ? DEFAULT_APP_SETTINGS.autonomousBotMinReplyDelayMs : Number(initialSettings.autonomousBotMinReplyDelayMs),
-        autonomousBotMaxReplyDelayMs: initialSettings.autonomousBotMaxReplyDelayMs === undefined ? DEFAULT_APP_SETTINGS.autonomousBotMaxReplyDelayMs : Number(initialSettings.autonomousBotMaxReplyDelayMs),
-        autonomousBotDisableThinking: initialSettings.autonomousBotDisableThinking === undefined ? DEFAULT_APP_SETTINGS.autonomousBotDisableThinking : !!initialSettings.autonomousBotDisableThinking,
+    const savedSettingsJson = localStorage.getItem(APP_SETTINGS_KEY);
+    const loadedSettings = savedSettingsJson ? JSON.parse(savedSettingsJson) : {};
+
+    const currentEnvKeyAvailable = typeof process.env.API_KEY === 'string' && process.env.API_KEY.length > 0;
+
+    const mergedInitialSettings: AppSettings = {
+        ...DEFAULT_APP_SETTINGS, // DEFAULT_APP_SETTINGS now correctly reflects envKeyIsAvailable
+        ...loadedSettings,
     };
-    if (processEnvApiKey && mergedSettings.geminiApiKeySource === 'env' && !initialSettings.userGeminiApiKey) {
-    } else if (!processEnvApiKey && mergedSettings.geminiApiKeySource === 'env') {
-      mergedSettings.geminiApiKeySource = 'user';
+
+    if (mergedInitialSettings.geminiApiKeySource === 'env' && !currentEnvKeyAvailable) {
+        mergedInitialSettings.geminiApiKeySource = 'user';
+        if (loadedSettings.geminiApiKeySource === 'env') { // Log only if it was explicitly 'env' in storage and now missing
+            console.warn("Environment API_KEY (process.env.API_KEY) was configured but is now missing. Switched to 'user' API key source. Please set API_KEY in environment or provide manually.");
+        }
     }
-    return mergedSettings;
+    
+    // Coercions for numerical and boolean settings from loaded values
+    mergedInitialSettings.maxImagesToAnalyzePerPost = loadedSettings.maxImagesToAnalyzePerPost === undefined ? DEFAULT_APP_SETTINGS.maxImagesToAnalyzePerPost : Number(loadedSettings.maxImagesToAnalyzePerPost);
+    mergedInitialSettings.autonomousBotCycleIntervalSeconds = loadedSettings.autonomousBotCycleIntervalSeconds === undefined ? DEFAULT_APP_SETTINGS.autonomousBotCycleIntervalSeconds : Number(loadedSettings.autonomousBotCycleIntervalSeconds);
+    mergedInitialSettings.autonomousBotFullThreadContextMaxChars = loadedSettings.autonomousBotFullThreadContextMaxChars === undefined ? DEFAULT_APP_SETTINGS.autonomousBotFullThreadContextMaxChars : Number(loadedSettings.autonomousBotFullThreadContextMaxChars);
+    mergedInitialSettings.geminiTemperature = loadedSettings.geminiTemperature === undefined ? DEFAULT_APP_SETTINGS.geminiTemperature : Number(loadedSettings.geminiTemperature);
+    mergedInitialSettings.geminiTopP = loadedSettings.geminiTopP === undefined ? DEFAULT_APP_SETTINGS.geminiTopP : Number(loadedSettings.geminiTopP);
+    mergedInitialSettings.geminiTopK = loadedSettings.geminiTopK === undefined ? DEFAULT_APP_SETTINGS.geminiTopK : Number(loadedSettings.geminiTopK);
+    mergedInitialSettings.geminiMaxOutputTokens = loadedSettings.geminiMaxOutputTokens === undefined ? DEFAULT_APP_SETTINGS.geminiMaxOutputTokens : Number(loadedSettings.geminiMaxOutputTokens);
+    mergedInitialSettings.geminiThinkingBudget = loadedSettings.geminiThinkingBudget === undefined ? DEFAULT_APP_SETTINGS.geminiThinkingBudget : Number(loadedSettings.geminiThinkingBudget);
+    mergedInitialSettings.autonomousBotMinReplyDelayMs = loadedSettings.autonomousBotMinReplyDelayMs === undefined ? DEFAULT_APP_SETTINGS.autonomousBotMinReplyDelayMs : Number(loadedSettings.autonomousBotMinReplyDelayMs);
+    mergedInitialSettings.autonomousBotMaxReplyDelayMs = loadedSettings.autonomousBotMaxReplyDelayMs === undefined ? DEFAULT_APP_SETTINGS.autonomousBotMaxReplyDelayMs : Number(loadedSettings.autonomousBotMaxReplyDelayMs);
+    
+    mergedInitialSettings.geminiAnalyzeOpMedia = loadedSettings.geminiAnalyzeOpMedia === undefined ? DEFAULT_APP_SETTINGS.geminiAnalyzeOpMedia : !!loadedSettings.geminiAnalyzeOpMedia;
+    mergedInitialSettings.geminiAnalyzeAnonMedia = loadedSettings.geminiAnalyzeAnonMedia === undefined ? DEFAULT_APP_SETTINGS.geminiAnalyzeAnonMedia : !!loadedSettings.geminiAnalyzeAnonMedia;
+    mergedInitialSettings.geminiReplyWithGeneratedImage = loadedSettings.geminiReplyWithGeneratedImage === undefined ? DEFAULT_APP_SETTINGS.geminiReplyWithGeneratedImage : !!loadedSettings.geminiReplyWithGeneratedImage;
+    mergedInitialSettings.botAnalyzesImagesInTriggerPosts = loadedSettings.botAnalyzesImagesInTriggerPosts === undefined ? DEFAULT_APP_SETTINGS.botAnalyzesImagesInTriggerPosts : !!loadedSettings.botAnalyzesImagesInTriggerPosts;
+    mergedInitialSettings.autonomousBotAllowReplyToSelf = loadedSettings.autonomousBotAllowReplyToSelf === undefined ? DEFAULT_APP_SETTINGS.autonomousBotAllowReplyToSelf : !!loadedSettings.autonomousBotAllowReplyToSelf;
+    mergedInitialSettings.useSearchGrounding = loadedSettings.useSearchGrounding === undefined ? DEFAULT_APP_SETTINGS.useSearchGrounding : !!loadedSettings.useSearchGrounding;
+    mergedInitialSettings.useThinkingBudget = loadedSettings.useThinkingBudget === undefined ? DEFAULT_APP_SETTINGS.useThinkingBudget : !!loadedSettings.useThinkingBudget;
+    mergedInitialSettings.autonomousBotDisableThinking = loadedSettings.autonomousBotDisableThinking === undefined ? DEFAULT_APP_SETTINGS.autonomousBotDisableThinking : !!loadedSettings.autonomousBotDisableThinking;
+
+    mergedInitialSettings.autonomousBotInitialContextScope = loadedSettings.autonomousBotInitialContextScope || DEFAULT_APP_SETTINGS.autonomousBotInitialContextScope;
+    mergedInitialSettings.geminiSafetySettings = loadedSettings.geminiSafetySettings || DEFAULT_APP_SETTINGS.geminiSafetySettings;
+    mergedInitialSettings.userAgent = loadedSettings.userAgent || generateUserAgent();
+    
+    return mergedInitialSettings;
   });
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -366,10 +379,14 @@ const App: React.FC = () => {
 
 
   useEffect(() => {
-    const keyToUse = settings.geminiApiKeySource === 'env' ? processEnvApiKey : settings.userGeminiApiKey;
+    // API key is sourced from process.env.API_KEY (if 'env' mode) or settings.userGeminiApiKey.
+    // process.env.API_KEY is a build-time constant provided by Vite.
+    const keyFromEnv = process.env.API_KEY; // This will be the actual string value or ""
+    const keyToUse = settings.geminiApiKeySource === 'env' ? keyFromEnv : settings.userGeminiApiKey;
 
     if (keyToUse) {
       if (ai && currentAiApiKeyRef.current === keyToUse) {
+        // AI client already initialized with the same key
         return;
       }
 
@@ -377,7 +394,7 @@ const App: React.FC = () => {
       try {
         const genAI = new GoogleGenAI({ apiKey: keyToUse });
         setAi(genAI);
-        currentAiApiKeyRef.current = keyToUse;
+        currentAiApiKeyRef.current = keyToUse; // Store the actual key string used
         addLog('Gemini API client initialized successfully.', 'success');
 
         if (!initBotJsonInfoLoggedRef.current) {
@@ -390,19 +407,24 @@ const App: React.FC = () => {
         currentAiApiKeyRef.current = null;
       }
     } else {
-      if (ai) {
+      if (ai) { // If AI client exists, but no key is available now
         setAi(null);
         currentAiApiKeyRef.current = null;
-        addLog('Gemini API client de-initialized (no API key).', 'warning');
+        addLog('Gemini API client de-initialized (no API key available).', 'warning');
       }
-      if (currentAiApiKeyRef.current !== null || !ai) {
+      // Log reasons if key is missing, ensuring not to spam if already logged or AI is already null.
+      if (currentAiApiKeyRef.current !== null || !ai) { // Log if we are transitioning to no key, or if AI is already null and we haven't logged recently
           if (settings.geminiApiKeySource === 'user' && !settings.userGeminiApiKey) {
-            addLog('Gemini API key (Manual) is not set. Gemini features disabled.', 'warning');
-          } else if (settings.geminiApiKeySource === 'env' && !processEnvApiKey) {
-            addLog('Gemini API key (VITE_GEMINI_API_KEY) not detected. Gemini features disabled.', 'warning');
+            addLog('Gemini API key (Manual User Input) is not set. Gemini features disabled.', 'warning');
+          } else if (settings.geminiApiKeySource === 'env' && !keyFromEnv) {
+            // keyFromEnv is derived from process.env.API_KEY which is defined by Vite
+            addLog('Environment API_KEY (process.env.API_KEY) is not set or not accessible to client build. Gemini features disabled if using "env" source.', 'warning');
           }
       }
     }
+  // Effect dependencies: if settings for API key source or user-provided key change.
+  // process.env.API_KEY is a build-time constant; app effectively re-initializes if that "changes" (e.g. new build with different .env)
+  // and settings are loaded.
   }, [settings.geminiApiKeySource, settings.userGeminiApiKey, addLog, ai]);
 
 
@@ -1069,7 +1091,8 @@ const runBotCycleCallback = useCallback(async () => {
     setAutonomousBotStatus, geminiDvachConversations, setGeminiDvachConversations,
     sentMessages, setSentMessages, currentBotOpMediaCache, setCurrentBotOpMediaCache,
     addLog,
-    commonPostToDvach,
+    commonPostToDvach, // commonPostToDvach itself depends on other state/props but is stable if its deps are listed correctly.
+    autonomousBotActive // Added to dependencies of runBotCycleCallback
 ]);
 
 
@@ -1092,10 +1115,10 @@ useEffect(() => {
         else if (!settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) reason = "Target board/thread not set";
 
         setAutonomousBotStatus(`Inactive - ${reason}`);
-        if (autonomousBotActive) {
+        if (autonomousBotActive) { // ensure we only log/set if it was trying to be active
              addLog(`Autonomous bot cannot run: ${reason}. Stopping.`, "bot_error");
         }
-        setAutonomousBotActive(false);
+        setAutonomousBotActive(false); // Ensure it's marked as inactive
         return;
     }
 
@@ -1103,34 +1126,43 @@ useEffect(() => {
     setAutonomousBotStatus("Active - Preparing for first cycle...");
     const botTaskId = addTask('bot_cycle', `Bot running on /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}`, () => setAutonomousBotActive(false));
 
+    // Run first cycle almost immediately then set interval
     const initialTimeoutId = window.setTimeout(() => {
-        if (autonomousBotActive) runBotCycleCallback();
-    }, 3000);
+        if (autonomousBotActive) { // Check again before running
+           runBotCycleCallback();
+        }
+    }, 3000); // Small delay for UI to update, then first run
 
     const intervalId = window.setInterval(() => {
-      if (autonomousBotActive) runBotCycleCallback();
+      if (autonomousBotActive) {  // Check again before running each interval
+          runBotCycleCallback();
+      } else { // If it became inactive during the interval, clear it.
+          window.clearInterval(autonomousBotIntervalRef.current!); // intervalRef.current should be set if this cb runs
+          autonomousBotIntervalRef.current = null;
+          removeTask(botTaskId); // Also remove the task if we clear interval this way
+      }
     }, settings.autonomousBotCycleIntervalSeconds * 1000);
 
     autonomousBotIntervalRef.current = intervalId;
 
     return () => {
         window.clearTimeout(initialTimeoutId);
-        window.clearInterval(intervalId);
+        window.clearInterval(intervalId); // Clear interval using the stored ID
         autonomousBotIntervalRef.current = null;
         removeTask(botTaskId);
         addLog("Autonomous bot interval stopped (useEffect cleanup).", "bot_setup");
     };
-}, [
+}, [ // Dependencies for starting/stopping the bot and its cycle configuration
     autonomousBotActive,
-    runBotCycleCallback,
+    runBotCycleCallback, // runBotCycleCallback itself has dependencies, ensure they are stable or included
     settings.autonomousBotCycleIntervalSeconds,
-    addLog,
-    ai,
-    dvachSessionCookies,
-    settings.autonomousBotTargetBoard,
-    settings.autonomousBotTargetThreadId,
-    addTask,
-    removeTask
+    settings.autonomousBotTargetBoard, // For initial check and logging
+    settings.autonomousBotTargetThreadId, // For initial check and logging
+    ai, // For initial check
+    dvachSessionCookies, // For initial check
+    addLog, // For logging start/stop
+    addTask, // For task management
+    removeTask // For task management
 ]);
 
   const toggleTheme = () => {
@@ -1163,14 +1195,14 @@ useEffect(() => {
 
   const handleFileUpload = useCallback(async (
     event: React.ChangeEvent<HTMLInputElement>,
-    setter?: React.Dispatch<React.SetStateAction<string[]>> // Make setter optional
+    _setter?: React.Dispatch<React.SetStateAction<string[]>> // Make setter optional, not used for now
   ) => {
     const file = event.target.files?.[0];
     if (file) {
       try {
         const content = await readFileContent(file);
-        if(setter) setter(content); // Only call setter if provided
-        addLog(`File "${file.name}" uploaded and processed. Lines: ${content.length}`, 'success');
+        // if(setter) setter(content); // Only call setter if provided
+        addLog(`File "${file.name}" uploaded and processed (content not stored in state for this generic handler). Lines: ${content.length}`, 'success');
       } catch (error) {
         addLog(`Failed to process file "${file.name}"`, 'error', error);
       }
@@ -1238,8 +1270,8 @@ useEffect(() => {
         setGeminiLabChatMessages(prev => [...prev, userMessage]);
         setGeminiLabPrompt('');
 
-        // Apply fix for sendMessageStream
         const streamResultPromise = chat.sendMessageStream({ message: currentLabPrompt });
+        // Await the promise to get the AsyncGenerator
         const streamGenerator = await streamResultPromise;
 
 
@@ -1262,7 +1294,9 @@ useEffect(() => {
         const contentParts: Part[] = [];
         if(geminiLabImageForMultimodal){
             const imageBytes = await geminiLabImageForMultimodal.arrayBuffer();
-            contentParts.push({ inlineData: { mimeType: geminiLabImageForMultimodal.type, data: Buffer.from(imageBytes).toString('base64') }});
+            // Buffer is not standard in browser, use Uint8Array and convert to base64 string
+            const base64String = btoa(String.fromCharCode(...new Uint8Array(imageBytes)));
+            contentParts.push({ inlineData: { mimeType: geminiLabImageForMultimodal.type, data: base64String }});
         }
         if(currentLabPrompt) contentParts.push({text: currentLabPrompt});
 
@@ -1270,36 +1304,17 @@ useEffect(() => {
 
         if (feature === GeminiFeature.GENERATE_CONTENT_STREAM) {
           const streamResponsePromise = ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
-          const streamResponse = await streamResponsePromise; // Assuming generateContentStream also might have the same type issue
+          const streamResponse = await streamResponsePromise;
           let fullText = "";
-          let finalAggregatedResponse: ActualGenerateContentResponse | null = null;
-
+          
           for await (const chunk of streamResponse) {
             fullText += chunk.text;
             setGeminiLabOutput(fullText);
-            // Check for grounding metadata in chunks (some APIs might provide it incrementally or in the last chunk)
              const chunkAsCustom = chunk as CustomGenerateContentResponse;
              if (chunkAsCustom.candidates?.[0]?.groundingMetadata?.groundingAttribution) {
                 setGeminiLabGroundingSources(chunkAsCustom.candidates[0].groundingMetadata.groundingAttribution.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })));
              }
           }
-          // Attempt to get aggregated response if SDK structure supports it (v1.x style)
-          // For newer SDKs, grounding might need to be extracted from the last chunk or specific event.
-          // This part of code assumes that if `streamResponse` was a Promise to an object, `response` would be on that object.
-          // However, if `streamResponse` directly is the generator, this `(streamResponse as any).response` might not be correct.
-          // This specific pattern of getting `response` from a stream is more typical of older SDK versions.
-          // For now, let's keep it, assuming it might be a way to get full response, but it needs verification with actual SDK.
-
-          // The most robust way to get the full response after a stream is usually via a separate property or method on the result
-          // of the initial `generateContentStream` call, if the SDK provides it.
-          // If `ai.models.generateContentStream` returns an object like `{ stream: AsyncGenerator, fullResponsePromise: Promise }`
-          // then `streamResponse` would be that object, and we'd iterate `streamResponse.stream`,
-          // and `await streamResponse.fullResponsePromise` for the final data.
-          // Given the current fix pattern, let's assume `streamResponse` *is* the generator.
-
-          // If grounding metadata is expected to be in the final aggregated response (not per chunk),
-          // there needs to be a way to get that. The current structure implies it might be in chunks.
-
           addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}.`, 'gemini');
 
         } else {
@@ -1821,7 +1836,11 @@ useEffect(() => {
     wordBreak: 'break-all',
   };
 
-  const renderSettingsPanel = () => (
+  const renderSettingsPanel = () => {
+    // This value will be the string from Vite's `define` or ""
+    const currentProcessEnvApiKey = process.env.API_KEY;
+
+    return (
      <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Application Settings</h2>
 
@@ -1895,7 +1914,7 @@ useEffect(() => {
             <div>
                 <label className="block text-sm font-medium">Gemini API Key Source:</label>
                 <select aria-label="Gemini API Key Source" value={settings.geminiApiKeySource} onChange={e => handleUpdateSettings({geminiApiKeySource: e.target.value as 'env' | 'user'})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
-                  <option value="env">Use Environment API_KEY {processEnvApiKey ? `(Detected: ${processEnvApiKey.substring(0,4)}...${processEnvApiKey.substring(processEnvApiKey.length - 4)})` : "(Not Detected/Accessible)"}</option>
+                  <option value="env">Use Environment API_KEY (process.env.API_KEY) {currentProcessEnvApiKey ? `(Detected: ${currentProcessEnvApiKey.substring(0,4)}...${currentProcessEnvApiKey.substring(currentProcessEnvApiKey.length - 4)})` : "(Not Detected/Accessible in client build)"}</option>
                   <option value="user">Enter API Key Manually</option>
                 </select>
                 {settings.geminiApiKeySource === 'user' && (
@@ -2003,7 +2022,7 @@ useEffect(() => {
       </details>
       <p className="text-xs text-gray-500 dark:text-gray-400">Settings are saved automatically to local storage.</p>
     </div>
-  );
+  )};
 
   const renderLogsPanel = () => (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
