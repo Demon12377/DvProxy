@@ -4,7 +4,6 @@ import {
   GoogleGenAI,
   Part,
   GenerateContentParameters
-  // GeminiChat (unused) removed
 } from "@google/genai";
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
@@ -12,10 +11,9 @@ import {
   DvachFile, GeminiDvachConversation, ChatMessage,
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
   GroundingChunk, CustomGenerateContentResponse, ActiveTask
-  // GroundingMetadata (unused) removed
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
-import { parseGeminiJsonResponse } from './services/geminiService'; // Changed to extension-less
+import { parseGeminiJsonResponse } from './services/geminiService.js';
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
@@ -24,8 +22,8 @@ import {
   BUMP_KEYWORDS,
   AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
   DEFAULT_APP_SETTINGS
-} from './constants'; // Assuming this correctly points to src/constants.ts based on file content
-import { generateUserAgent } from '../utils/userAgentGenerator'; // Correct path to root utils
+} from './constants';
+import { generateUserAgent } from '../utils/userAgentGenerator';
 
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu,

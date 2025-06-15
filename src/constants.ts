@@ -1,5 +1,5 @@
 // constants.ts - Store widely used, unchanging values for the application.
-import { AppSettings, SafetySettingRule } from './src/types.ts'; // Explicit .ts extension
+import { AppSettings, SafetySettingRule } from './types';
 
 export const DVACH_DOMAINS: string[] = ["https://2ch.hk", "https://2ch.life", "https://2ch.su"];
 
@@ -12,9 +12,10 @@ export const PROXY_URL_CODETABS_BASE = "https://api.codetabs.com/v1/proxy?quest=
 export const APP_SETTINGS_KEY = "dvach_gemini_app_settings_v2.12_no_lab";
 export const SENT_MESSAGES_KEY = "dvach_gemini_sent_messages_v2.12_no_lab";
 export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.12_no_lab";
-export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1"; // Added export
+export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1";
+// Removed GEMINI_LAB_CHAT_HISTORY_KEY
 
-// Copied from src/constants.ts to ensure they are available if App.tsx uses ../constants
+
 export const APP_VERSION = "2.12.0";
 export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
