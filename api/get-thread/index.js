@@ -1,8 +1,8 @@
-
 // api/get-thread/index.js
 import fetch from 'node-fetch';
 
 const DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DVACH_BASE_URL = 'https://2ch.hk';
 
 export default async function handler(req, res) {
   const timestamp = new Date().toISOString();
@@ -11,7 +11,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent'); // Allow X-User-Agent
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent'); 
     return res.status(200).json({ message: 'CORS preflight successful for /api/get-thread' });
   }
 
@@ -29,14 +29,16 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: { code: 400, message: 'Board and thread query parameters are required (e.g., /api/get-thread?board=b&thread=12345)' } });
   }
 
-  const dvachUrl = `https://2ch.hk/${board}/res/${thread}.json`;
+  const dvachUrl = `${DVACH_BASE_URL}/${board}/res/${thread}.json`;
   console.log(`${timestamp} [api/get-thread] Fetching from Dvach API: ${dvachUrl} with UA: ${clientUserAgent}`);
 
   try {
     const dvachResponse = await fetch(dvachUrl, {
       headers: {
-        'User-Agent': clientUserAgent, // Use client-provided or default UA
-        'Accept': 'application/json',
+        'User-Agent': clientUserAgent, 
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+        'Referer': `${DVACH_BASE_URL}/${board}/`, // Add Referer
       }
     });
 

@@ -21,7 +21,9 @@ import {
   DVACH_DOMAINS,
   BUMP_KEYWORDS,
   AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
-  DEFAULT_APP_SETTINGS
+  DEFAULT_APP_SETTINGS,
+  PROXY_URL_X2U_KEYED_BASE, // Added for user's custom proxy
+  PROXY_URL_CORS_ANYWHERE_OFFICIAL // Added for user's custom proxy
 } from './constants';
 import { generateUserAgent } from '../utils/userAgentGenerator';
 
@@ -1234,6 +1236,31 @@ useEffect(() => {
     </div>
   );
 
+  const handleProxyModeChange = (
+    e: React.ChangeEvent<HTMLSelectElement>, 
+    type: 'GET' | 'ImagesGET'
+  ) => {
+    const newModeValue = e.target.value;
+    let newMode: ProxyModeForGET;
+    let newCustomUrl = type === 'GET' ? settings.customProxyUrlForGET : settings.customProxyUrlForImagesGET;
+
+    if (newModeValue === "USER_X2U_KEYED") {
+      newMode = 'custom_general_param';
+      newCustomUrl = PROXY_URL_X2U_KEYED_BASE;
+    } else if (newModeValue === "USER_CORS_ANYWHERE_OFFICIAL") {
+      newMode = 'custom_cors_anywhere';
+      newCustomUrl = PROXY_URL_CORS_ANYWHERE_OFFICIAL;
+    } else {
+      newMode = newModeValue as ProxyModeForGET;
+    }
+    
+    if (type === 'GET') {
+      handleUpdateSettings({ proxyModeForGET: newMode, customProxyUrlForGET: newCustomUrl });
+    } else {
+      handleUpdateSettings({ proxyModeForImagesGET: newMode, customProxyUrlForImagesGET: newCustomUrl });
+    }
+  };
+  
   const renderSettingsPanel = () => {
     const currentProcessEnvApiKey = process.env.API_KEY;
     return (
@@ -1278,8 +1305,35 @@ useEffect(() => {
         <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">CORS Proxy (Client GETs)</summary>
         <div className="mt-3 space-y-3">
             <p className="text-xs text-gray-500 dark:text-gray-400">For client-side GET requests (e.g., images, or thread data if not serverless). Dvach POSTs use serverless functions.</p>
-            <div><label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Thread Data:</label><select id="settingsProxyModeForGET" value={settings.proxyModeForGET} onChange={e=>handleUpdateSettings({proxyModeForGET:e.target.value as ProxyModeForGET})} className="input-field mt-1"><option value="vercel_serverless">Vercel Serverless (Targets 2ch.hk)</option><option value="custom_cors_anywhere">CORS Anywhere Style</option><option value="custom_go_x2u">go.x2u.in Style</option><option value="custom_codetabs">CodeTabs Style</option><option value="custom_general_prefix">General Prefix Proxy</option><option value="custom_general_param">General Param Proxy</option><option value="none">No Proxy</option></select>{settings.proxyModeForGET!=='vercel_serverless'&&settings.proxyModeForGET!=='none'&&(<input type="text" placeholder="Custom Proxy URL for Thread Data" value={settings.customProxyUrlForGET} onChange={e=>handleUpdateSettings({customProxyUrlForGET:e.target.value})} className="input-field mt-1"/>)}</div>
-            <div><label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Images/Media:</label><select id="settingsProxyModeForImagesGET" value={settings.proxyModeForImagesGET} onChange={e=>handleUpdateSettings({proxyModeForImagesGET:e.target.value as ProxyModeForGET})} className="input-field mt-1"><option value="custom_codetabs">CodeTabs Style (Default Images)</option><option value="custom_cors_anywhere">CORS Anywhere Style</option><option value="custom_go_x2u">go.x2u.in Style</option><option value="custom_general_prefix">General Prefix Proxy</option><option value="custom_general_param">General Param Proxy</option><option value="none">No Proxy</option></select>{settings.proxyModeForImagesGET!=='none'&&(<input type="text" placeholder="Custom Proxy URL for Images" value={settings.customProxyUrlForImagesGET} onChange={e=>handleUpdateSettings({customProxyUrlForImagesGET:e.target.value})} className="input-field mt-1"/>)}</div>
+            <div>
+                <label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Thread Data:</label>
+                <select id="settingsProxyModeForGET" value={settings.proxyModeForGET === 'custom_general_param' && settings.customProxyUrlForGET === PROXY_URL_X2U_KEYED_BASE ? 'USER_X2U_KEYED' : (settings.proxyModeForGET === 'custom_cors_anywhere' && settings.customProxyUrlForGET === PROXY_URL_CORS_ANYWHERE_OFFICIAL ? 'USER_CORS_ANYWHERE_OFFICIAL' : settings.proxyModeForGET)} onChange={(e) => handleProxyModeChange(e, 'GET')} className="input-field mt-1">
+                    <option value="vercel_serverless">Vercel Serverless (Targets 2ch.hk)</option>
+                    <option value="USER_X2U_KEYED">X2U Keyed (User Provided)</option>
+                    <option value="USER_CORS_ANYWHERE_OFFICIAL">CORS Anywhere Official (User Provided)</option>
+                    <option value="custom_cors_anywhere">CORS Anywhere Style (Custom)</option>
+                    <option value="custom_go_x2u">go.x2u.in Style (Custom)</option>
+                    <option value="custom_codetabs">CodeTabs Style (Custom)</option>
+                    <option value="custom_general_prefix">General Prefix Proxy (Custom)</option>
+                    <option value="custom_general_param">General Param Proxy (Custom)</option>
+                    <option value="none">No Proxy</option>
+                </select>
+                {(settings.proxyModeForGET !=='vercel_serverless' && settings.proxyModeForGET !=='none') && (<input type="text" placeholder="Custom Proxy URL for Thread Data" value={settings.customProxyUrlForGET} onChange={e=>handleUpdateSettings({customProxyUrlForGET:e.target.value})} className="input-field mt-1"/>)}
+            </div>
+            <div>
+                <label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Images/Media:</label>
+                <select id="settingsProxyModeForImagesGET" value={settings.proxyModeForImagesGET === 'custom_general_param' && settings.customProxyUrlForImagesGET === PROXY_URL_X2U_KEYED_BASE ? 'USER_X2U_KEYED' : (settings.proxyModeForImagesGET === 'custom_cors_anywhere' && settings.customProxyUrlForImagesGET === PROXY_URL_CORS_ANYWHERE_OFFICIAL ? 'USER_CORS_ANYWHERE_OFFICIAL' : settings.proxyModeForImagesGET)} onChange={(e) => handleProxyModeChange(e, 'ImagesGET')} className="input-field mt-1">
+                    <option value="USER_X2U_KEYED">X2U Keyed (User Provided)</option>
+                    <option value="USER_CORS_ANYWHERE_OFFICIAL">CORS Anywhere Official (User Provided)</option>
+                    <option value="custom_codetabs">CodeTabs Style (Default for Images)</option>
+                    <option value="custom_cors_anywhere">CORS Anywhere Style (Custom)</option>
+                    <option value="custom_go_x2u">go.x2u.in Style (Custom)</option>
+                    <option value="custom_general_prefix">General Prefix Proxy (Custom)</option>
+                    <option value="custom_general_param">General Param Proxy (Custom)</option>
+                    <option value="none">No Proxy</option>
+                </select>
+                {settings.proxyModeForImagesGET !=='none' && (<input type="text" placeholder="Custom Proxy URL for Images" value={settings.customProxyUrlForImagesGET} onChange={e=>handleUpdateSettings({customProxyUrlForImagesGET:e.target.value})} className="input-field mt-1"/>)}
+            </div>
         </div>
       </details>
       <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">

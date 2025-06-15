@@ -1,9 +1,12 @@
 // constants.ts - Store widely used, unchanging values for the application.
-import { AppSettings, SafetySettingRule } from './types';
+import { AppSettings, SafetySettingRule } from './types'; // Corrected import path
 
 export const DVACH_DOMAINS: string[] = ["https://2ch.hk", "https://2ch.life", "https://2ch.su"];
 
-export const DEFAULT_CORS_ANYWHERE_PROXY = "https://cors-anywhere.herokuapp.com/"; // Standard public instance
+export const PROXY_URL_CORS_ANYWHERE_OFFICIAL = "https://cors-anywhere.com/"; // User-provided
+export const PROXY_URL_X2U_KEYED_BASE = "https://go.x2u.in/proxy?email=early4@punkproof.com&apiKey=d97e1643&url="; // User-provided
+
+export const DEFAULT_CORS_ANYWHERE_PROXY = "https://cors-anywhere.herokuapp.com/"; // Standard public instance - kept for legacy or other uses
 export const PROXY_URL_GO_X2U_BASE = "https://go.x2u.in/proxy?url="; // Common go.x2u.in structure
 export const PROXY_URL_CODETABS_BASE = "https://api.codetabs.com/v1/proxy?quest=";
 
@@ -13,7 +16,6 @@ export const APP_SETTINGS_KEY = "dvach_gemini_app_settings_v2.12_no_lab";
 export const SENT_MESSAGES_KEY = "dvach_gemini_sent_messages_v2.12_no_lab";
 export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.12_no_lab";
 export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1";
-// Removed GEMINI_LAB_CHAT_HISTORY_KEY
 
 
 export const APP_VERSION = "2.12.0";

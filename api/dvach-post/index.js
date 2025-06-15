@@ -1,4 +1,3 @@
-
 // api/dvach-post/index.js
 import formidable from 'formidable';
 import fs from 'fs';
@@ -32,7 +31,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ result: 0, error: { code: 405, message: `Method Not Allowed. Only POST requests are accepted. Received: ${req.method}` } });
   }
 
-  const form = formidable({ multiples: false }); // Allow only one file for 'file[]'
+  const form = formidable({ multiples: false }); 
 
   try {
     const [fields, files] = await new Promise((resolve, reject) => {
@@ -46,7 +45,6 @@ export default async function handler(req, res) {
       });
     });
     
-    // Helper to get single string value from formidable fields (which can be arrays)
     const getFieldValue = (fieldName) => {
       const value = fields[fieldName];
       const singleValue = Array.isArray(value) ? value[0] : value;
@@ -54,14 +52,12 @@ export default async function handler(req, res) {
     };
 
     const board = getFieldValue('board');
-    // This is Dvach's 'thread' field (0 for new thread, OP num for existing)
     const threadIdForDvach = getFieldValue('thread_id_for_dvach'); 
-    // This is Dvach's 'parent' field (specific post num being replied to)
     const parentNumForDvach = getFieldValue('parent_num_for_dvach'); 
     const comment = getFieldValue('comment');
     const passcodeAuthCookieValue = getFieldValue('passcode_auth_cookie_value');
-    const userCodeCookieValue = getFieldValue('user_code_cookie_value'); // Can be null/undefined
-    const emailSage = getFieldValue('email'); // For 'sage'
+    const userCodeCookieValue = getFieldValue('user_code_cookie_value'); 
+    const emailSage = getFieldValue('email'); 
     const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT;
 
 
@@ -69,7 +65,7 @@ export default async function handler(req, res) {
       console.error(`${timestamp} [api/dvach-post] CRITICAL: passcode_auth_cookie_value is missing.`);
       return res.status(401).json({ result: 0, error: { code: -2001, message: 'Dvach session cookie (passcode_auth) is missing. Please login first.' } });
     }
-    if (!board || !comment) { // Comment can be empty if file is present, but for simplicity let's require it for now.
+    if (!board || !comment) { 
       const missingInfo = `Board: ${board || 'MISSING'}, Comment: ${comment ? 'Present' : 'MISSING'}`;
       console.log(`${timestamp} [api/dvach-post] Missing required fields. Details: ${missingInfo}`);
       return res.status(400).json({ result: 0, error: { code: -2002, message: `Missing required fields for posting. Details: ${missingInfo}` } });
@@ -77,28 +73,27 @@ export default async function handler(req, res) {
     
     console.log(`${timestamp} [api/dvach-post] Using provided session cookies to post to Dvach /user/posting... UA: ${clientUserAgent}`);
     const dvachPostFormData = new FormDataNode();
-    dvachPostFormData.append('task', 'post'); // As per makaba.md
+    dvachPostFormData.append('task', 'post'); 
     dvachPostFormData.append('board', board);
     
-    // Dvach API 'thread' field: 0 for new thread, OP num for existing.
     const effectiveThreadIdForDvach = (!threadIdForDvach || threadIdForDvach === "0") ? "0" : threadIdForDvach;
     dvachPostFormData.append('thread', effectiveThreadIdForDvach);
     console.log(`${timestamp} [api/dvach-post] Dvach API 'thread' field set to: ${effectiveThreadIdForDvach}`);
 
     if (parentNumForDvach) {
-      dvachPostFormData.append('parent', parentNumForDvach); // Dvach API 'parent' field for specific reply target
+      dvachPostFormData.append('parent', parentNumForDvach); 
       console.log(`${timestamp} [api/dvach-post] Dvach API 'parent' (reply to specific post) field set to: ${parentNumForDvach}`);
     }
     
     dvachPostFormData.append('comment', comment);
-    dvachPostFormData.append('captcha_type', 'passcode'); // Posting with passcode
+    dvachPostFormData.append('captcha_type', 'passcode'); 
 
-    if (emailSage === 'sage') { // Dvach uses 'email' field for sage
+    if (emailSage === 'sage') { 
       dvachPostFormData.append('email', 'sage'); 
       console.log(`${timestamp} [api/dvach-post] Sage requested.`);
     }
     
-    const fileEntry = files.file; // formidable wraps single file in array if 'multiples: false' might not be fully respected by field name 'file[]'
+    const fileEntry = files.file; 
     const actualFile = Array.isArray(fileEntry) ? fileEntry[0] : fileEntry;
 
     if (actualFile && actualFile.filepath && actualFile.size > 0) {
@@ -117,10 +112,16 @@ export default async function handler(req, res) {
     }
 
     const dvachPostRequestHeaders = {
-      ...dvachPostFormData.getHeaders(), // Sets Content-Type: multipart/form-data; boundary=...
+      ...dvachPostFormData.getHeaders(), 
       'Cookie': cookieHeader, 
-      'Accept': 'application/json', // Dvach should respond with JSON
+      'Accept': 'application/json, text/plain, */*', 
       'User-Agent': clientUserAgent,
+      'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+      'Referer': `${DVACH_BASE_URL}/${board}/`,
+      'Origin': DVACH_BASE_URL,
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
     };
     
     console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach: ${dvachPostUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);
@@ -140,22 +141,19 @@ export default async function handler(req, res) {
     const dvachPostResponseText = await dvachPostResponse.text();
     console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response status: ${dvachPostResponse.status}, body preview: ${dvachPostResponseText.substring(0,300)}`);
 
-    res.setHeader('Content-Type', 'application/json'); // Ensure client gets JSON
+    res.setHeader('Content-Type', 'application/json'); 
     
     let dvachPostJson;
     try {
       dvachPostJson = JSON.parse(dvachPostResponseText);
     } catch (e) {
       console.warn(`${timestamp} [api/dvach-post] Dvach /user/posting response not valid JSON. Status: ${dvachPostResponse.status}. Text: ${dvachPostResponseText.substring(0,200)}`);
-      // If Dvach returned non-OK status and non-JSON, it's an error from Dvach
       if (!dvachPostResponse.ok) {
         return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach (non-JSON), status ${dvachPostResponse.status}` } });
       }
-      // If Dvach returned OK but non-JSON, this is unexpected for /user/posting?nc=1
       return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach, but response was not valid JSON. Check Dvach manually for post.", rawResponsePreview: dvachPostResponseText.substring(0,200), num: Date.now().toString() });
     }
 
-    // Forward Dvach's JSON response and status code
     return res.status(dvachPostResponse.status).json(dvachPostJson);
 
   } catch (error) {
