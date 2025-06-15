@@ -1,9 +1,29 @@
 // api/dvach-login/index.js
 import fetch from 'node-fetch';
-import FormDataNode from 'form-data'; // Using FormData for Node.js environment
+import FormDataNode from 'form-data'; 
 
-const DEFAULT_DVACH_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DVACH_BASE_URL = 'https://2ch.hk';
+
+// Environment variables for server-side outbound proxy
+const OUTBOUND_PROXY_URL = process.env.DVACH_OUTBOUND_PROXY_URL;
+const OUTBOUND_PROXY_TYPE = process.env.DVACH_OUTBOUND_PROXY_TYPE; // e.g., 'general_param', 'prefix'
+
+function buildProxiedUrlForServerless(targetDvachUrl) {
+  if (!OUTBOUND_PROXY_URL) {
+    return targetDvachUrl; 
+  }
+  if (OUTBOUND_PROXY_TYPE === 'general_param') {
+    return `${OUTBOUND_PROXY_URL}${encodeURIComponent(targetDvachUrl)}`;
+  }
+  if (OUTBOUND_PROXY_TYPE === 'prefix') {
+    const proxyBase = OUTBOUND_PROXY_URL.endsWith('/') ? OUTBOUND_PROXY_URL : `${OUTBOUND_PROXY_URL}/`;
+    return `${proxyBase}${targetDvachUrl}`;
+  }
+  console.warn(`[api/dvach-login] DVACH_OUTBOUND_PROXY_URL is set, but DVACH_OUTBOUND_PROXY_TYPE ('${OUTBOUND_PROXY_TYPE}') is unrecognized. Attempting direct connection or simple prefix proxy.`);
+  const proxyBase = OUTBOUND_PROXY_URL.endsWith('/') ? OUTBOUND_PROXY_URL : `${OUTBOUND_PROXY_URL}/`;
+  return `${proxyBase}${targetDvachUrl}`;
+}
 
 function extractCookieValue(setCookieHeader, cookieName) {
   if (!setCookieHeader) return null;
@@ -24,130 +44,148 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent');
 
-
   if (req.method === 'OPTIONS') {
     return res.status(200).json({ message: 'CORS preflight successful for /api/dvach-login' });
   }
 
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST, OPTIONS');
+    res.setHeader('Content-Type', 'application/json');
     return res.status(405).json({ result: 0, error: { code: 405, message: `Method Not Allowed. Only POST requests are accepted for /api/dvach-login. Received: ${req.method}` } });
   }
 
-  // Vercel parses JSON body automatically if Content-Type is application/json
-  // If sending FormData from client, need to parse it. For simplicity, assume JSON body.
-  let purchasedPasscode;
-  let clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT;
-
-  if (req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
-      purchasedPasscode = req.body.purchased_passcode;
-  } else {
-      // Fallback or specific parsing for FormData if client sends that for this endpoint
-      // For now, strongly recommend client sends JSON for this simple request.
-      console.warn(`${timestamp} [api/dvach-login] Content-Type not application/json. Attempting to read body as text for passcode.`);
-      // This is a simplified way if not using formidable; for production, use formidable for FormData.
-      // However, this endpoint is simple enough that client should send JSON.
-      try {
-        let body = '';
-        for await (const chunk of req) {
-            body += chunk;
-        }
-        const params = new URLSearchParams(body);
-        purchasedPasscode = params.get('purchased_passcode');
-         if(!purchasedPasscode && body.startsWith("{")) { // Simple JSON check
-            purchasedPasscode = JSON.parse(body).purchased_passcode;
-        }
-
-      } catch (parseError) {
-         console.error(`${timestamp} [api/dvach-login] Error parsing non-JSON request body:`, parseError);
-         return res.status(400).json({ result: 0, error: {code: -1009, message: "Invalid request body format. Please send JSON with 'purchased_passcode'."}});
-      }
-  }
-
-
-  if (!purchasedPasscode) {
-    console.error(`${timestamp} [api/dvach-login] 'purchased_passcode' is missing from request body.`);
-    return res.status(400).json({ result: 0, error: { code: -1001, message: "Dvach 'purchased_passcode' string is missing from request body." } });
-  }
-
-  console.log(`${timestamp} [api/dvach-login] Attempting Dvach login with purchased passcode...`);
-  const loginFormData = new FormDataNode(); // Use FormData for Node.js to send to Dvach
-  loginFormData.append('passcode', purchasedPasscode);
-
-  const loginUrl = `${DVACH_BASE_URL}/user/passlogin?json=1`;
-  let loginResponse;
-
   try {
-    loginResponse = await fetch(loginUrl, {
-      method: 'POST',
-      body: loginFormData, // loginFormData is an instance of FormDataNode
-      headers: {
-        ...loginFormData.getHeaders(), // Important for multipart/form-data with boundary
-        'User-Agent': clientUserAgent,
-        'Accept': 'application/json',
-      },
-    });
+    let purchasedPasscode;
+    const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT_FOR_SERVERLESS;
 
-    const loginResponseText = await loginResponse.text();
-    console.log(`${timestamp} [api/dvach-login] Dvach login response status: ${loginResponse.status}, text (first 300): ${loginResponseText.substring(0,300)}`);
+    // Robust body parsing
+    if (req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
+        if (typeof req.body === 'string') { // Vercel sometimes stringifies JSON body
+             try { purchasedPasscode = JSON.parse(req.body).purchased_passcode; }
+             catch (e) { /* ignore, let next block handle if still string */ }
+        }
+        if (typeof req.body === 'object' && req.body !== null) { // Already parsed by Vercel
+            purchasedPasscode = req.body.purchased_passcode;
+        }
+    }
+    // Fallback for environments where body might not be pre-parsed or is text
+    if (purchasedPasscode === undefined) {
+        let bodyData = '';
+        for await (const chunk of req) { bodyData += chunk; }
+        try { purchasedPasscode = JSON.parse(bodyData).purchased_passcode; }
+        catch (parseError) {
+           console.error(`${timestamp} [api/dvach-login] Error parsing request body as JSON:`, parseError, "Body was:", bodyData.substring(0,200));
+           res.setHeader('Content-Type', 'application/json');
+           return res.status(400).json({ result: 0, error: {code: -1009, message: "Invalid request body format. Please send JSON with 'purchased_passcode'."}});
+        }
+    }
+
+
+    if (!purchasedPasscode) {
+      console.error(`${timestamp} [api/dvach-login] 'purchased_passcode' is missing from request body.`);
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(400).json({ result: 0, error: { code: -1001, message: "Dvach 'purchased_passcode' string is missing from request body." } });
+    }
+
+    console.log(`${timestamp} [api/dvach-login] Attempting Dvach login with purchased passcode... UA: ${clientUserAgent}`);
+    const loginFormData = new FormDataNode(); 
+    loginFormData.append('passcode', purchasedPasscode);
     
+    const targetDvachLoginUrl = `${DVACH_BASE_URL}/user/passlogin?json=1`; 
+    const finalLoginFetchUrl = buildProxiedUrlForServerless(targetDvachLoginUrl);
+    console.log(`${timestamp} [api/dvach-login] Fetching. Final URL: ${finalLoginFetchUrl}, Target Dvach: ${targetDvachLoginUrl}, Outbound Proxy Used: ${OUTBOUND_PROXY_URL ? 'Yes ('+OUTBOUND_PROXY_TYPE+')' : 'No'}`);
+    
+    let loginResponse;
+
+    const dvachRequestHeaders = {
+      ...loginFormData.getHeaders(), 
+      'User-Agent': clientUserAgent,
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+      'Referer': `${DVACH_BASE_URL}/`,
+      'Origin': DVACH_BASE_URL,
+    };
+
+    try {
+      loginResponse = await fetch(finalLoginFetchUrl, {
+        method: 'POST',
+        body: loginFormData, 
+        headers: dvachRequestHeaders,
+      });
+    } catch (fetchLoginError) {
+      console.error(`${timestamp} [api/dvach-login] Network error calling Dvach/Proxy for /user/passlogin:`, fetchLoginError);
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(502).json({ result: 0, error: { code: -1007, message: `Error connecting to Dvach/Proxy for login: ${fetchLoginError.message}` } });
+    }
+    
+    const loginResponseText = await loginResponse.text();
+    console.log(`${timestamp} [api/dvach-login] Dvach/Proxy login response status: ${loginResponse.status}, text (first 300): ${loginResponseText.substring(0,300)}`);
+    
+    const passcodeAuthCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'passcode_auth');
+    const userCodeCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'usercode');
+
     let loginJson;
     try {
       loginJson = JSON.parse(loginResponseText);
     } catch (e) {
-      console.error(`${timestamp} [api/dvach-login] Dvach login response was not JSON: ${loginResponseText.substring(0,200)}. Status: ${loginResponse.status}`);
-      if (!loginResponse.ok) {
-          return res.status(loginResponse.status).json({ result: 0, error: { code: loginResponse.status, message: `Dvach login request failed: ${loginResponseText.substring(0,100)}` } });
+      console.error(`${timestamp} [api/dvach-login] Dvach/Proxy login response was not JSON: ${loginResponseText.substring(0,200)}. Status: ${loginResponse.status}`);
+      if (passcodeAuthCookie) {
+          console.warn(`${timestamp} [api/dvach-login] Dvach/Proxy response not JSON, but passcode_auth cookie found. Proceeding with cookie.`);
+          res.setHeader('Content-Type', 'application/json');
+          return res.status(200).json({
+              result: 1, 
+              message: "Dvach/Proxy response was not JSON, but session cookie found. Assuming login state.",
+              passcode_auth_cookie_value: passcodeAuthCookie,
+              user_code_cookie_value: userCodeCookie,
+              dvach_raw_response_preview: loginResponseText.substring(0,200)
+          });
       }
-      return res.status(500).json({ result: 0, error: { code: -1006, message: `Dvach login response was OK but not valid JSON. Response: ${loginResponseText.substring(0,100)}` } });
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(loginResponse.status === 200 ? 500 : loginResponse.status)
+                 .json({ result: 0, error: { code: -1006, message: `Dvach/Proxy login response was not valid JSON (Status: ${loginResponse.status}). Response: ${loginResponseText.substring(0,100)}` } });
     }
 
-    // Check for explicit errors from Dvach, even if status code might be 200 initially (e.g. error in JSON payload)
     if (loginJson.error && typeof loginJson.error.code === 'number' && typeof loginJson.error.message === 'string') {
-        console.error(`${timestamp} [api/dvach-login] Dvach login failed with structured error. Code: ${loginJson.error.code}, Message: ${loginJson.error.message}`);
-        return res.status(401).json({
+        console.error(`${timestamp} [api/dvach-login] Dvach/Proxy login failed with structured error. Code: ${loginJson.error.code}, Message: ${loginJson.error.message}`);
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(loginResponse.status).json({ 
             result: 0,
-            error: {
-                code: loginJson.error.code, 
-                message: `Dvach login error: ${loginJson.error.message}`
-            }
+            error: { code: loginJson.error.code, message: `Dvach/Proxy login error: ${loginJson.error.message}` }
         });
     }
-    // Handle other non-OK statuses if not already covered by structured error
-    if (!loginResponse.ok && loginResponse.status !== 303) { // 303 can be a success redirect
-       const loginErrorMsg = loginJson.reason || loginResponseText.substring(0,100) || `Login failed with status ${loginResponse.status}`;
-       console.error(`${timestamp} [api/dvach-login] Dvach login failed. Status: ${loginResponse.status}. Message: ${loginErrorMsg}`);
-       return res.status(401).json({ result: 0, error: { code: -1003, message: `Dvach login failed: ${loginErrorMsg}` } });
+   
+    if (loginJson.result !== 1 && loginJson.result !== 2) { 
+      const errMsg = loginJson.reason || loginJson.Error || "Passcode login did not return success or active status (result != 1 or 2).";
+      console.error(`${timestamp} [api/dvach-login] Dvach/Proxy login response indicates failure: ${errMsg}. Full JSON:`, loginJson);
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(401).json({ result: 0, error: { code: loginJson.error?.code || -1004, message: `Dvach/Proxy login error: ${errMsg}` } });
     }
-    
-    // Check the JSON response content for success indicators (result: 1 or 2)
-    if (loginJson.result !== 1 && loginJson.result !== 2) { // result:2 is "passcode already active"
-      const errMsg = loginJson.reason || "Passcode login did not return success or active status.";
-      console.error(`${timestamp} [api/dvach-login] Dvach login response indicates failure: ${errMsg}`);
-      return res.status(401).json({ result: 0, error: { code: -1004, message: `Dvach login error: ${errMsg}` } });
-    }
-
-    const passcodeAuthCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'passcode_auth');
-    const userCodeCookie = extractCookieValue(loginResponse.headers.raw()['set-cookie'], 'usercode');
 
     if (!passcodeAuthCookie) {
-      console.error(`${timestamp} [api/dvach-login] CRITICAL: Dvach login response was success/active (result: ${loginJson.result}), but no passcode_auth cookie was set.`);
-      return res.status(500).json({ result: 0, error: { code: -1005, message: "Dvach login succeeded (or was already active) but no passcode_auth cookie was set in response." } });
+      console.error(`${timestamp} [api/dvach-login] CRITICAL: Dvach/Proxy login response was success/active (result: ${loginJson.result}), but no passcode_auth cookie was set. This usually means the passcode was invalid or another issue occurred.`);
+      res.setHeader('Content-Type', 'application/json');
+      const dvachErrorReason = loginJson.reason || loginJson.Error || "Dvach/Proxy login reported success/active but failed to provide session cookie.";
+      return res.status(401).json({ result: 0, error: { code: loginJson.error?.code || -1005, message: dvachErrorReason } });
     }
     
-    console.log(`${timestamp} [api/dvach-login] Dvach login successful. Cookies obtained. passcode_auth: ${passcodeAuthCookie ? 'OK' : 'MISSING'}, usercode: ${userCodeCookie || 'MISSING'}`);
+    console.log(`${timestamp} [api/dvach-login] Dvach login successful. Cookies obtained. passcode_auth: OK, usercode: ${userCodeCookie || 'MISSING'}`);
     
     res.setHeader('Content-Type', 'application/json');
     return res.status(200).json({
-      result: 1,
-      message: "Dvach login successful.",
+      result: loginJson.result, 
+      message: loginJson.message || "Dvach login successful.",
       passcode_auth_cookie_value: passcodeAuthCookie,
-      user_code_cookie_value: userCodeCookie, // Can be null
+      user_code_cookie_value: userCodeCookie, 
+      passcode_details_from_dvach: loginJson.passcode 
     });
 
-  } catch (fetchLoginError) {
-    console.error(`${timestamp} [api/dvach-login] Network or other error during Dvach login:`, fetchLoginError);
-    res.setHeader('Content-Type', 'application/json');
-    return res.status(502).json({ result: 0, error: { code: -1007, message: `Error connecting to Dvach for login: ${fetchLoginError.message}` } });
+  } catch (unhandledError) {
+    const errorTimestamp = new Date().toISOString();
+    console.error(`${errorTimestamp} [api/dvach-login] CRITICAL UNHANDLED ERROR in handler:`, unhandledError);
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+      const errorMessage = unhandledError instanceof Error ? unhandledError.message : 'Unknown unhandled error';
+      return res.status(500).json({ result: 0, error: { code: -5000, message: `Unexpected server error: ${errorMessage.substring(0,300)}` } });
+    }
   }
 }

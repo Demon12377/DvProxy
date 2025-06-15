@@ -1,10 +1,8 @@
-// This file is currently a placeholder.
-// The Gemini API interactions are mostly within App.tsx for direct state manipulation.
-// If more complex, reusable Gemini logic emerges, it can be moved here.
+// src/services/geminiService.ts
 
-// Example: Helper function for parsing JSON from Gemini response (already in App.tsx or similar if needed)
 export function parseGeminiJsonResponse<T>(responseText: string): T | T[] | null {
   let jsonStr = responseText.trim();
+  // Regex to remove markdown fences (```json ... ``` or ``` ... ```)
   const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s; 
   const match = jsonStr.match(fenceRegex);
   if (match && match[2]) {
@@ -16,14 +14,16 @@ export function parseGeminiJsonResponse<T>(responseText: string): T | T[] | null
     return parsedData as T | T[];
   } catch (e) {
     console.error("Failed to parse JSON response from Gemini:", e, "Original text:", responseText);
+    // Attempt to clean up common JSON issues like trailing commas
     try {
       const cleanedJsonStr = jsonStr
-        .replace(/,\s*}/g, '}')
-        .replace(/,\s*]/g, ']');
+        .replace(/,\s*}/g, '}') // Remove trailing comma before closing brace
+        .replace(/,\s*]/g, ']'); // Remove trailing comma before closing bracket
       const parsedDataStrict = JSON.parse(cleanedJsonStr);
+      console.warn("Successfully parsed JSON after cleaning trailing commas.");
       return parsedDataStrict as T | T[];
     } catch (e2) {
-      console.error("Failed to parse JSON response even after cleaning:", e2, "Cleaned text:", jsonStr);
+      console.error("Failed to parse JSON response even after cleaning trailing commas:", e2, "Cleaned text:", jsonStr);
       return null;
     }
   }

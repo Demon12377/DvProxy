@@ -6,12 +6,33 @@ import FormDataNode from 'form-data';
 
 export const config = {
   api: {
-    bodyParser: false,
+    bodyParser: false, 
   },
 };
 
 const DEFAULT_DVACH_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DVACH_BASE_URL = 'https://2ch.hk';
+
+// Environment variables for server-side outbound proxy
+const OUTBOUND_PROXY_URL = process.env.DVACH_OUTBOUND_PROXY_URL;
+const OUTBOUND_PROXY_TYPE = process.env.DVACH_OUTBOUND_PROXY_TYPE; // e.g., 'general_param', 'prefix'
+
+function buildProxiedUrlForServerless(targetDvachUrl) {
+  if (!OUTBOUND_PROXY_URL) {
+    return targetDvachUrl; 
+  }
+  if (OUTBOUND_PROXY_TYPE === 'general_param') {
+    return `${OUTBOUND_PROXY_URL}${encodeURIComponent(targetDvachUrl)}`;
+  }
+  if (OUTBOUND_PROXY_TYPE === 'prefix') {
+    const proxyBase = OUTBOUND_PROXY_URL.endsWith('/') ? OUTBOUND_PROXY_URL : `${OUTBOUND_PROXY_URL}/`;
+    return `${proxyBase}${targetDvachUrl}`;
+  }
+  console.warn(`[api/dvach-post] DVACH_OUTBOUND_PROXY_URL is set, but DVACH_OUTBOUND_PROXY_TYPE ('${OUTBOUND_PROXY_TYPE}') is unrecognized. Attempting direct connection or simple prefix proxy.`);
+  const proxyBase = OUTBOUND_PROXY_URL.endsWith('/') ? OUTBOUND_PROXY_URL : `${OUTBOUND_PROXY_URL}/`;
+  return `${proxyBase}${targetDvachUrl}`;
+}
+
 
 export default async function handler(req, res) {
   const timestamp = new Date().toISOString();
@@ -31,7 +52,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ result: 0, error: { code: 405, message: `Method Not Allowed. Only POST requests are accepted. Received: ${req.method}` } });
   }
 
-  const form = formidable({ multiples: false });
+  const form = formidable({ multiples: false }); 
 
   try {
     const [fields, files] = await new Promise((resolve, reject) => {
@@ -45,20 +66,19 @@ export default async function handler(req, res) {
       });
     });
     
-    console.log(`${timestamp} [api/dvach-post] Parsed client fields (excluding file data):`, JSON.stringify(Object.fromEntries(Object.entries(fields).map(([k,v]) => [k, Array.isArray(v) && v.length === 1 ? v[0] : v])), null, 2));
-
     const getFieldValue = (fieldName) => {
       const value = fields[fieldName];
-      return Array.isArray(value) ? value[0] : value;
+      const singleValue = Array.isArray(value) ? value[0] : value;
+      return typeof singleValue === 'string' ? singleValue.trim() : singleValue;
     };
 
     const board = getFieldValue('board');
-    const clientThreadId = getFieldValue('thread_id_for_dvach'); // This comes from the client
-    const clientParentNum = getFieldValue('parent_num_for_dvach'); // This comes from the client
+    const threadIdForDvach = getFieldValue('thread_id_for_dvach'); 
+    const parentNumForDvach = getFieldValue('parent_num_for_dvach'); 
     const comment = getFieldValue('comment');
     const passcodeAuthCookieValue = getFieldValue('passcode_auth_cookie_value');
-    const userCodeCookieValue = getFieldValue('user_code_cookie_value'); // Optional
-    const emailSage = getFieldValue('email'); // 'sage' or undefined
+    const userCodeCookieValue = getFieldValue('user_code_cookie_value'); 
+    const emailSage = getFieldValue('email'); 
     const clientUserAgent = req.headers['x-user-agent'] || DEFAULT_DVACH_USER_AGENT;
 
 
@@ -66,63 +86,49 @@ export default async function handler(req, res) {
       console.error(`${timestamp} [api/dvach-post] CRITICAL: passcode_auth_cookie_value is missing.`);
       return res.status(401).json({ result: 0, error: { code: -2001, message: 'Dvach session cookie (passcode_auth) is missing. Please login first.' } });
     }
-    if (!board || !comment) {
+    if (!board || !comment) { 
       const missingInfo = `Board: ${board || 'MISSING'}, Comment: ${comment ? 'Present' : 'MISSING'}`;
       console.log(`${timestamp} [api/dvach-post] Missing required fields. Details: ${missingInfo}`);
       return res.status(400).json({ result: 0, error: { code: -2002, message: `Missing required fields for posting. Details: ${missingInfo}` } });
     }
     
-    console.log(`${timestamp} [api/dvach-post] Using provided session cookies to post to Dvach /user/posting...`);
+    console.log(`${timestamp} [api/dvach-post] Using provided session cookies to post to Dvach /user/posting... UA: ${clientUserAgent}`);
     const dvachPostFormData = new FormDataNode();
+    dvachPostFormData.append('task', 'post'); 
     dvachPostFormData.append('board', board);
     
-    // Determine the 'thread' value for Dvach API
-    // If clientThreadId is "0" or empty, it's a new thread, so Dvach expects "0".
-    // Otherwise, use the clientThreadId (which is the OP post number of the thread context).
-    const dvachThreadValue = (!clientThreadId || clientThreadId === "0") ? "0" : clientThreadId;
-    dvachPostFormData.append('thread', dvachThreadValue);
-     console.log(`${timestamp} [api/dvach-post] Dvach 'thread' field set to: ${dvachThreadValue}`);
+    const effectiveThreadIdForDvach = (!threadIdForDvach || threadIdForDvach === "0") ? "0" : threadIdForDvach;
+    dvachPostFormData.append('thread', effectiveThreadIdForDvach);
+    console.log(`${timestamp} [api/dvach-post] Dvach API 'thread' field set to: ${effectiveThreadIdForDvach}`);
 
-    // If clientParentNum is provided, it means this is a reply to a specific post within the thread.
-    // Dvach's 'parent' field takes this specific post number for replies.
-    // If it's a new thread post (dvachThreadValue is "0"), 'parent' is not usually sent or is "0".
-    // If it's a post to an existing thread but not a direct reply to a specific comment (e.g. just a general post in thread), 'parent' would be the thread OP number (clientThreadId).
-    // The current client logic in App.tsx sends `replyToPostNum` which becomes `parent_num_for_dvach` here.
-    // If `parent_num_for_dvach` is present, it's a direct reply.
-    if (clientParentNum) {
-      dvachPostFormData.append('parent', clientParentNum);
-      console.log(`${timestamp} [api/dvach-post] Dvach 'parent' field (reply to specific post) set to: ${clientParentNum}`);
+    if (parentNumForDvach) {
+      dvachPostFormData.append('parent', parentNumForDvach); 
+      console.log(`${timestamp} [api/dvach-post] Dvach API 'parent' (reply to specific post) field set to: ${parentNumForDvach}`);
     }
     
     dvachPostFormData.append('comment', comment);
-    dvachPostFormData.append('captcha_type', 'passcode'); // Still 'passcode' as we are using a passcode-derived session
+    dvachPostFormData.append('captcha_type', 'passcode'); 
 
-    if (emailSage) { 
-      dvachPostFormData.append('email', emailSage); 
+    if (emailSage === 'sage') { 
+      dvachPostFormData.append('email', 'sage'); 
+      console.log(`${timestamp} [api/dvach-post] Sage requested.`);
     }
     
-    const fileEntryArray = files.file; // Assuming 'file' is the field name from client
-    let actualFileAttached = false;
-    if (fileEntryArray && fileEntryArray.length > 0) {
-      const file = fileEntryArray[0];
-      if (file && file.filepath && file.size > 0) {
-        dvachPostFormData.append('file[]', fs.createReadStream(file.filepath), { 
-          filename: file.originalFilename || 'upload.tmp', // Use original filename if available
-          contentType: file.mimetype || 'application/octet-stream', // Use mimetype if available
-        });
-        actualFileAttached = true;
-        console.log(`${timestamp} [api/dvach-post] Actual file attached to Dvach request: ${file.originalFilename}`);
-      }
+    const fileEntry = files.file; 
+    const actualFile = Array.isArray(fileEntry) ? fileEntry[0] : fileEntry;
+
+    if (actualFile && actualFile.filepath && actualFile.size > 0) {
+      dvachPostFormData.append('file[]', fs.createReadStream(actualFile.filepath), { 
+        filename: actualFile.originalFilename || 'upload.tmp', 
+        contentType: actualFile.mimetype || 'application/octet-stream', 
+      });
+      console.log(`${timestamp} [api/dvach-post] Actual file attached to Dvach request: ${actualFile.originalFilename}`);
     }
 
-    if (!actualFileAttached) {
-      // If no file, Dvach might require a 'dummy' file field or just works without.
-      // The Python script sends a dummy field if no file. Let's replicate.
-      console.log(`${timestamp} [api/dvach-post] No actual file attached by client. Sending 'dummy' field to Dvach.`);
-      dvachPostFormData.append('dummy', 'dummy content', { filename: '', contentType: 'text/plain' });
-    }
-    
-    const dvachPostUrl = `${DVACH_BASE_URL}/user/posting`;
+    const targetDvachPostUrl = `${DVACH_BASE_URL}/user/posting?nc=1`;
+    const finalPostFetchUrl = buildProxiedUrlForServerless(targetDvachPostUrl);
+    console.log(`${timestamp} [api/dvach-post] Fetching. Final URL: ${finalPostFetchUrl}, Target Dvach: ${targetDvachPostUrl}, Outbound Proxy Used: ${OUTBOUND_PROXY_URL ? 'Yes ('+OUTBOUND_PROXY_TYPE+')' : 'No'}`);
+
     
     let cookieHeader = `passcode_auth=${passcodeAuthCookieValue}`;
     if (userCodeCookieValue) {
@@ -130,49 +136,52 @@ export default async function handler(req, res) {
     }
 
     const dvachPostRequestHeaders = {
-      ...dvachPostFormData.getHeaders(), // Necessary for multipart/form-data boundary
+      ...dvachPostFormData.getHeaders(), 
       'Cookie': cookieHeader, 
-      'Accept': 'application/json',
-      'User-Agent': clientUserAgent, // Use User-Agent from client
+      'Accept': 'application/json, text/plain, */*',
+      'User-Agent': clientUserAgent,
+      'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+      'Referer': `${DVACH_BASE_URL}/${board}/`,
+      'Origin': DVACH_BASE_URL,
     };
+    
+    console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach/Proxy: ${finalPostFetchUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);
 
     let dvachPostResponse;
     try {
-        dvachPostResponse = await fetch(dvachPostUrl, {
+        dvachPostResponse = await fetch(finalPostFetchUrl, {
           method: 'POST',
           body: dvachPostFormData,
           headers: dvachPostRequestHeaders,
         });
     } catch (fetchPostError) {
-        console.error(`${timestamp} [api/dvach-post] Network error calling Dvach /user/posting:`, fetchPostError);
-        return res.status(502).json({ result:0, error: { code: -2003, message: `Failed to connect to Dvach for posting: ${fetchPostError.message}` }});
+        console.error(`${timestamp} [api/dvach-post] Network error calling Dvach/Proxy /user/posting:`, fetchPostError);
+        return res.status(502).json({ result:0, error: { code: -2003, message: `Failed to connect to Dvach/Proxy for posting: ${fetchPostError.message}` }});
     }
 
     const dvachPostResponseText = await dvachPostResponse.text();
-    console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response status: ${dvachPostResponse.status}`);
-    console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response text (first 500 chars): ${dvachPostResponseText.substring(0, 500)}`);
+    console.log(`${timestamp} [api/dvach-post] Dvach/Proxy /user/posting response status: ${dvachPostResponse.status}, body preview: ${dvachPostResponseText.substring(0,300)}`);
 
-    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Type', 'application/json'); 
     
     let dvachPostJson;
     try {
       dvachPostJson = JSON.parse(dvachPostResponseText);
     } catch (e) {
-      console.warn(`${timestamp} [api/dvach-post] Dvach /user/posting response not valid JSON. Status: ${dvachPostResponse.status}. Text: ${dvachPostResponseText.substring(0,200)}`);
-      // If Dvach gives a non-JSON success (e.g., HTML page on some weird success/redirect), but status is OK
+      console.warn(`${timestamp} [api/dvach-post] Dvach/Proxy /user/posting response not valid JSON. Status: ${dvachPostResponse.status}. Text: ${dvachPostResponseText.substring(0,200)}`);
       if (!dvachPostResponse.ok) {
-        return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach (non-JSON), status ${dvachPostResponse.status}` } });
+        return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach/Proxy (non-JSON), status ${dvachPostResponse.status}` } });
       }
-      // If status is OK but not JSON, it's ambiguous.
-      return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach, but response was not valid JSON. Check Dvach manually.", rawResponse: dvachPostResponseText.substring(0,200) });
+      return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach/Proxy, but response was not valid JSON. Check Dvach manually for post.", rawResponsePreview: dvachPostResponseText.substring(0,200), num: Date.now().toString() });
     }
 
-    // Forward Dvach's status and JSON response to the client
     return res.status(dvachPostResponse.status).json(dvachPostJson);
 
   } catch (error) {
     console.error(`${timestamp} [api/dvach-post] Unhandled error in /api/dvach-post handler:`, error);
-    res.setHeader('Content-Type', 'application/json');
-    return res.status(500).json({ result:0, error: { code: -2000, message: `Internal Server Error in /api/dvach-post: ${error.message}` }});
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(500).json({ result:0, error: { code: -2000, message: `Internal Server Error in /api/dvach-post: ${error.message}` }});
+    }
   }
 }
