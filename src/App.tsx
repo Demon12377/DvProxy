@@ -16,7 +16,7 @@ import {
   // GroundingMetadata (unused) removed
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
-import { parseGeminiJsonResponse } from './services/geminiService.ts';
+import { parseGeminiJsonResponse } from './services/geminiService';
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
