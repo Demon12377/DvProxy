@@ -13,7 +13,7 @@ import {
   GroundingChunk, CustomGenerateContentResponse, ActiveTask
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
-import { parseGeminiJsonResponse } from './services/geminiService.js';
+import { parseGeminiJsonResponse } from './services/geminiService';
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
@@ -507,7 +507,7 @@ const App: React.FC = () => {
 
     let geminiReplyText = "";
     try {
-      const requestConfig: GenerateContentParameters['config'] = {
+      const requestConfig:GenerateContentParameters['config'] = {
         systemInstruction: systemInstructionForReply,
         temperature: settings.geminiTemperature, topP: settings.geminiTopP,
         topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
