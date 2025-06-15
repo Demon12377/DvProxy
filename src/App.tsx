@@ -1,18 +1,19 @@
+
 /// <reference types="vite/client" />
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   GoogleGenAI,
   Part,
   Chat as GeminiChatSDK,
-  GenerateContentParameters,
-  GenerateContentResponse as ActualGenerateContentResponse // Renamed for clarity
+  GenerateContentParameters
+  // Removed: GenerateContentResponse as ActualGenerateContentResponse
 } from "@google/genai";
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse,
   DvachFile, GeminiDvachConversation, ChatMessage,
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
-  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata
+  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata, FinishReason
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import {
@@ -646,7 +647,7 @@ const App: React.FC = () => {
                                 (settings.geminiAnalyzeAnonMedia && !isOpPost);
         if (analysisEnabled) {
             imageFilesToAnalyze = targetPost.files
-                .filter(file => (file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9))
+                .filter(file => (file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9)) // Common image types
                 .slice(0, settings.maxImagesToAnalyzePerPost);
         }
     }
@@ -655,7 +656,7 @@ const App: React.FC = () => {
         userPromptText += `\n\nThe post >>${targetPost.num} includes ${imageFilesToAnalyze.length} image(s) (e.g., "${imageFilesToAnalyze[0].name}"). Please analyze these images as part of your reply generation.`;
         for (const dvachImageFile of imageFilesToAnalyze) {
             try {
-                const imageBaseUrl = DVACH_DOMAINS[0];
+                const imageBaseUrl = DVACH_DOMAINS[0]; // Use the first domain for fetching Dvach media
                 const imageUrl = `${imageBaseUrl}${dvachImageFile.path}`;
                 const proxiedImageUrl = buildProxiedGetUrl(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
                 addLog(`Fetching image ${dvachImageFile.name} for Gemini analysis (manual reply) using proxy mode '${settings.proxyModeForImagesGET}' from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
@@ -669,11 +670,12 @@ const App: React.FC = () => {
 
                 let mimeType = imageBlob.type;
                 if (!mimeType || !mimeType.startsWith('image/')) {
+                    // Infer mime type from Dvach's file type if blob type is generic
                     mimeType = dvachImageFile.type === 1 ? 'image/jpeg' :
                                dvachImageFile.type === 2 ? 'image/png' :
                                dvachImageFile.type === 4 ? 'image/gif' :
-                               dvachImageFile.type === 9 ? 'image/webp' :
-                               'image/jpeg';
+                               dvachImageFile.type === 9 ? 'image/webp' : // Added webp
+                               'image/jpeg'; // Default fallback
                 }
 
                 const base64data = await new Promise<string>((resolveP, rejectP) => {
@@ -702,7 +704,7 @@ const App: React.FC = () => {
         safetySettings: settings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})),
       };
       if (settings.useThinkingBudget) {
-        requestConfig.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
+        requestConfig.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget > 0 ? settings.geminiThinkingBudget : undefined };
       }
 
       const response = await ai.models.generateContent({
@@ -712,6 +714,7 @@ const App: React.FC = () => {
       });
       const rawGeminiText = response.text || "";
 
+      // Ensure the reply starts with quoting the target post
       const quotePattern = new RegExp(`^>>${targetPost.num}\\s*\\n?`);
       if (quotePattern.test(rawGeminiText.trimStart())) {
           geminiReplyText = rawGeminiText.trim();
@@ -731,7 +734,8 @@ const App: React.FC = () => {
               prompt: imagePpt,
               config: {
                 numberOfImages: 1,
-                outputMimeType: 'image/jpeg',
+                outputMimeType: 'image/jpeg', // Request JPEG for broader compatibility
+                // No safetySettings for generateImages as per guidelines
               }
             });
             if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
@@ -747,8 +751,10 @@ const App: React.FC = () => {
             }
         }
       }
+      // commonPostToDvach: threadIdForDvachApiInput is threadForReply, replyToPostNumForDvachApi is targetPost.num
       const newPostNumByGemini = await commonPostToDvach(geminiReplyText, finalFileToPost, postUseSage, boardForReply, threadForReply, targetPost.num);
 
+      // Update the sentMessages array to mark this post as a Gemini reply
       setSentMessages(prev => prev.map(msg =>
         msg.num === newPostNumByGemini && msg.board === boardForReply && msg.thread === threadForReply ?
         { ...msg, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPost } : msg
@@ -756,6 +762,7 @@ const App: React.FC = () => {
       addLog(`Manual Gemini reply posted as >>${newPostNumByGemini} to /${boardForReply}/${threadForReply}.`, 'success');
 
     } catch (error) {
+      // Avoid double-logging "Failed to post" or "Login" errors handled by commonPostToDvach
       if (! (error as Error).message.toLowerCase().includes("post failed") && ! (error as Error).message.toLowerCase().includes("dvach login")) {
          addLog(`Error during manual Gemini reply generation for >>${targetPost.num}: ${(error as Error).message}`, 'error', error);
       }
@@ -769,18 +776,18 @@ const App: React.FC = () => {
 const runBotCycleCallback = useCallback(async () => {
     if (!ai || !dvachSessionCookies?.passcode_auth) {
         addAutonomousBotActivityLog("Bot cycle skipped: AI or Dvach login missing.", 'bot_warning');
-        if (autonomousBotActive) setAutonomousBotActive(false);
+        if (autonomousBotActive) setAutonomousBotActive(false); // Stop bot if prerequisites are missing
         return;
     }
 
-    const currentBotSettings = settings;
+    const currentBotSettings = settings; // Use a snapshot of settings for this cycle
     const botBoard = currentBotSettings.autonomousBotTargetBoard.trim();
     const botThreadId = currentBotSettings.autonomousBotTargetThreadId.trim();
 
     if (!botBoard || !botThreadId) {
         addAutonomousBotActivityLog("Target board/thread for bot not set. Stopping bot.", 'bot_error');
         setAutonomousBotStatus("Error: Target board/thread not set.");
-        if (autonomousBotActive) setAutonomousBotActive(false);
+        if (autonomousBotActive) setAutonomousBotActive(false); // Stop bot
         return;
     }
 
@@ -792,6 +799,7 @@ const runBotCycleCallback = useCallback(async () => {
     let workingConvo: GeminiDvachConversation | undefined = undefined;
     const existingConversation = geminiDvachConversations.get(currentBotTargetKeyForCycle);
 
+    // Step 1: Fetch current thread data and update/initialize conversation context
     try {
         const threadPostsResponse = await getThreadData(
             botBoard, botThreadId,
@@ -802,12 +810,15 @@ const runBotCycleCallback = useCallback(async () => {
             addAutonomousBotActivityLog("No posts found or error loading thread for bot cycle.", 'bot_warning', { threadKey: currentBotTargetKeyForCycle });
             setAutonomousBotStatus("Error loading thread data for bot.");
             if (existingConversation) {
+                // Mark existing convo as error but don't discard, just update timestamp
                 workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
             }
+            // No further processing if thread data is unavailable
         } else {
             const allPostsInThread = threadPostsResponse.threads[0].posts;
             const opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
 
+            // Build initial context text based on scope
             let initialContextTextForSystemMessage = "";
             const maxCharsForFullContext = currentBotSettings.autonomousBotFullThreadContextMaxChars > 0 ? currentBotSettings.autonomousBotFullThreadContextMaxChars : Infinity;
 
@@ -825,11 +836,12 @@ const runBotCycleCallback = useCallback(async () => {
                     currentChars += postSummary.length;
                 }
                 initialContextTextForSystemMessage = fullThreadSummary + "CONTEXT_END\n";
-            } else {
+            } else { // 'op_only'
                 const opPostTextContent = opPost?.comment.replace(/<[^>]+>/g, '').substring(0, 1500) || "N/A";
                 initialContextTextForSystemMessage = `CONTEXT_START: OP Post (>>${opPost?.num || 'N/A'}) for thread /${botBoard}/${botThreadId} on ${DVACH_DOMAINS[0]}:\n"${opPostTextContent}"\nCONTEXT_END\n`;
             }
 
+            // Update OP media cache if needed
             if (opPost && currentBotSettings.geminiAnalyzeOpMedia &&
                 (!currentBotOpMediaCache || currentBotOpMediaCache.threadId !== botThreadId || currentBotOpMediaCache.opPostNum !== opPost.num)) {
                 addAutonomousBotActivityLog(`Updating/creating OP media cache (>>${opPost.num})...`, 'bot_setup');
@@ -858,17 +870,18 @@ const runBotCycleCallback = useCallback(async () => {
                 setCurrentBotOpMediaCache({ threadId: botThreadId, opPostNum: opPost.num, mediaParts: opMediaPartsAccumulator, mediaContextText: opMediaContextTextAccumulator });
                 addAutonomousBotActivityLog(`OP media cache updated. ${opMediaPartsAccumulator.length} images. Context: ${opMediaContextTextAccumulator}`, 'bot_setup');
             } else if (!opPost || !currentBotSettings.geminiAnalyzeOpMedia) {
-                if (currentBotOpMediaCache) setCurrentBotOpMediaCache(null);
+                if (currentBotOpMediaCache) setCurrentBotOpMediaCache(null); // Clear cache if OP media not relevant
             }
 
             const opMediaPartsForInitialContext = (currentBotOpMediaCache?.threadId === botThreadId && currentBotOpMediaCache.opPostNum === opPost?.num) ? currentBotOpMediaCache.mediaParts : [];
 
+            // Initialize or update conversation
             if (!existingConversation || existingConversation.status === 'archived' || existingConversation.board !== botBoard || existingConversation.threadId !== botThreadId) {
                 addAutonomousBotActivityLog(`Creating new conversation context for ${currentBotTargetKeyForCycle}. Scope: ${currentBotSettings.autonomousBotInitialContextScope}`, 'bot_setup');
                 const initialHistoryMessageParts: Part[] = [...opMediaPartsForInitialContext, { text: initialContextTextForSystemMessage }];
                 workingConvo = {
                     id: currentBotTargetKeyForCycle, board: botBoard, threadId: botThreadId,
-                    triggerPostNum: opPost?.num || botThreadId,
+                    triggerPostNum: opPost?.num || botThreadId, // Initial trigger is OP
                     botSystemPromptUsed: currentBotSettings.autonomousBotSystemPrompt,
                     history: [{ role: 'user', parts: initialHistoryMessageParts, timestamp: Date.now(), id: `context-setup-${Date.now()}` }],
                     lastCheckedTimestamp: Date.now(), participatingPostNumbers: [opPost?.num || botThreadId],
@@ -876,19 +889,23 @@ const runBotCycleCallback = useCallback(async () => {
                     initialContext: { opPostNum: opPost?.num, opPostText: initialContextTextForSystemMessage, opPostMediaParts: opMediaPartsForInitialContext }
                 };
             } else {
+                 // Deep copy to avoid modifying state directly if we decide to keep it
                  workingConvo = JSON.parse(JSON.stringify(existingConversation));
-                 let updatedHistory = [...workingConvo!.history];
+                 let updatedHistory = [...workingConvo!.history]; // Start with existing history
+
+                 // Identify posts we've already processed or are part of the history
                  const knownPostNumbersInHistoryOrProcessed = new Set([
                     ...updatedHistory.filter(msg => msg.role === 'user' && msg.id.startsWith("user-dvach-")).map(msg => msg.id.replace("user-dvach-","")),
                     ...updatedHistory.filter(msg => msg.role === 'model' && msg.id.startsWith("model-reply-to-")).map(msg => msg.id.replace("model-reply-to-","")),
-                    ...updatedHistory.filter(msg => msg.id.startsWith("bot-")).map(msg => msg.id.replace('bot-','')),
-                    ...workingConvo!.participatingPostNumbers
+                    ...updatedHistory.filter(msg => msg.id.startsWith("bot-")).map(msg => msg.id.replace('bot-','')), // Bot's own posts
+                    ...workingConvo!.participatingPostNumbers // All posts involved
                  ]);
 
-                 const newPostsFromThread = allPostsInThread.filter(p =>
-                    p.timestamp * 1000 > workingConvo!.lastCheckedTimestamp &&
-                    !knownPostNumbersInHistoryOrProcessed.has(p.num) &&
-                    (!sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId) || currentBotSettings.autonomousBotAllowReplyToSelf)
+                 // Filter for new posts since last check, not already processed, and not own bot posts unless allowed
+                const newPostsFromThread = allPostsInThread.filter(p =>
+                    p.timestamp * 1000 > workingConvo!.lastCheckedTimestamp && // Newer than last check
+                    !knownPostNumbersInHistoryOrProcessed.has(p.num) && // Not already known/processed
+                    (!sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId) || currentBotSettings.autonomousBotAllowReplyToSelf) // Not a bot post OR allow reply to self
                 );
 
                  if (newPostsFromThread.length > 0) {
@@ -899,13 +916,15 @@ const runBotCycleCallback = useCallback(async () => {
                         if(!workingConvo!.participatingPostNumbers.includes(p.num)) workingConvo!.participatingPostNumbers.push(p.num);
                     });
 
-                    if (updatedHistory.length > 50) {
+                    // Simple history truncation (keeping initial context + last N messages)
+                    if (updatedHistory.length > 50) { // Example: Keep initial context + 49 most recent interactions
                         const contextSetupMessage = updatedHistory.find(msg => msg.id.startsWith("context-setup-"));
                         const otherMessages = updatedHistory.filter(msg => !msg.id.startsWith("context-setup-"));
                         updatedHistory = contextSetupMessage ? [contextSetupMessage, ...otherMessages.slice(-49)] : otherMessages.slice(-50);
                     }
                  }
                  workingConvo!.history = updatedHistory;
+                 // Ensure OP media parts are up-to-date in the working conversation object
                  if (workingConvo!.initialContext) {
                     workingConvo!.initialContext.opPostMediaParts = opMediaPartsForInitialContext;
                  }
@@ -914,36 +933,46 @@ const runBotCycleCallback = useCallback(async () => {
     } catch (err) {
         addAutonomousBotActivityLog(`Error during thread data fetch/context setup for bot: ${(err as Error).message}. Cycle ending.`, 'bot_error', err);
         if (existingConversation) {
+            // Update timestamp and mark as error, but keep the conversation object
             workingConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' };
         }
+        // If no existing conversation and fetch failed, workingConvo might be undefined.
+        // This is handled below.
     }
 
+    // CRITICAL: If workingConvo is still undefined, it means initial thread fetch failed badly
     if (!workingConvo) {
         addAutonomousBotActivityLog("CRITICAL: Bot conversation context is null/undefined (e.g., initial thread fetch failed). Cycle ending.", 'bot_error', { contextKey: currentBotTargetKeyForCycle, existingConvoStatus: existingConversation?.status });
         setAutonomousBotStatus("Error: Bot context initialization failure.");
+        // If there was an existing conversation and it got lost, try to mark it as error in main state
         if (existingConversation && existingConversation.status !== 'error') {
              const erroredConvo = { ...existingConversation, lastCheckedTimestamp: Date.now(), status: 'error' as const };
              setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, erroredConvo));
         }
-        return;
+        return; // End cycle if context is broken
     }
 
+    // Make a mutable copy for this cycle to modify before setting state.
     let activeConversationForCycle: GeminiDvachConversation = workingConvo;
 
+    // Step 2: Determine reply target based on mode
     if (currentBotSettings.autonomousBotReplyMode === 'random_in_thread') {
         setAutonomousBotStatus("Mode 'random_in_thread': Finding target...");
+        // Re-fetch just for post list if needed, or use already fetched 'allPostsInThread' if available & fresh.
+        // For simplicity, let's assume 'allPostsInThread' from context setup is fresh enough.
         const allPostsInThreadForRandom = (await getThreadData(botBoard, botThreadId, currentBotSettings.proxyModeForGET, currentBotSettings.customProxyUrlForGET, currentBotSettings.userAgent))?.threads?.[0]?.posts || [];
         const opPostNumInBotLogic = allPostsInThreadForRandom.find(p => p.num === botThreadId || p.op ===1)?.num;
 
+        // Filter out OP, bot's own posts (unless allowed), bump posts, and posts already in conversation
         const botPostNumbers = new Set(sentMessages
             .filter(sm => sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId)
             .map(sm => sm.num));
 
         const eligiblePosts = allPostsInThreadForRandom.filter(p =>
-            p.num !== opPostNumInBotLogic &&
-            (!botPostNumbers.has(p.num) || currentBotSettings.autonomousBotAllowReplyToSelf) &&
-            !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) &&
-            !activeConversationForCycle.participatingPostNumbers.includes(p.num)
+            p.num !== opPostNumInBotLogic && // Not OP
+            (!botPostNumbers.has(p.num) || currentBotSettings.autonomousBotAllowReplyToSelf) && // Not bot's own post OR allow reply to self
+            !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) && // Not a bump post
+            !activeConversationForCycle.participatingPostNumbers.includes(p.num) // Not already part of this conversation context
         );
 
         if (eligiblePosts.length === 0) {
@@ -953,8 +982,10 @@ const runBotCycleCallback = useCallback(async () => {
             addAutonomousBotActivityLog(`Bot selected random post >>${targetPost.num} for reply.`, 'bot_activity');
             setAutonomousBotStatus(`Generating reply to >>${targetPost.num}...`);
 
+            // Prepare history for Gemini, including the initial system message from context
             let historyForGeminiCall = [...activeConversationForCycle.history];
 
+            // Construct the current "user" message for Gemini, including target post and its images
             let currentUserMessageText = `You are replying to post >>${targetPost.num}. This post says: "${targetPost.comment.replace(/<[^>]+>/g, '').substring(0, 500)}".`;
             const currentUserMessageParts: Part[] = [];
 
@@ -977,16 +1008,18 @@ const runBotCycleCallback = useCallback(async () => {
                 }
             }
             currentUserMessageParts.push({text: currentUserMessageText + `\nGenerate your reply.`});
-            historyForGeminiCall.push({ role: 'user', parts: currentUserMessageParts, timestamp: Date.now(), id: `user-dvach-${targetPost.num}`});
+            historyForGeminiCall.push({ role: 'user', parts: currentUserMessageParts, timestamp: Date.now(), id: `user-dvach-${targetPost.num}`}); // Add this new interaction
 
+            // Step 3: Call Gemini API
             try {
                 const botGenConfig: GenerateContentParameters['config'] = {
                     systemInstruction: currentBotSettings.autonomousBotSystemPrompt,
-                    temperature: 0.85, topK: 50, topP: 0.95,
+                    temperature: 0.85, // Slightly higher for more varied replies
+                    topK: 50, topP: 0.95,
                     maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
                     responseMimeType: "application/json",
                     responseSchema: { type: "object", properties: { replyText: { type: "string" } }, required: ["replyText"] },
-                    safetySettings: currentBotSettings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})),
+                    safetySettings: currentBotSettings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})), // Type assertion
                 };
                 if (currentBotSettings.autonomousBotDisableThinking) {
                     botGenConfig.thinkingConfig = { thinkingBudget: 0 };
@@ -994,7 +1027,7 @@ const runBotCycleCallback = useCallback(async () => {
 
                 const geminiApiResponse = await ai.models.generateContent({
                     model: GEMINI_TEXT_MODEL,
-                    contents: historyForGeminiCall,
+                    contents: historyForGeminiCall, // Send the built history
                     config: botGenConfig
                 });
 
@@ -1003,6 +1036,7 @@ const runBotCycleCallback = useCallback(async () => {
                     const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
                     if (parsedReply && parsedReply.replyText) {
                         let rawReplyBody = parsedReply.replyText.trim();
+                        // Remove the quote if Gemini added it already (it shouldn't with JSON mode instructions, but safeguard)
                         const quotePatternForBot = new RegExp(`^>>${targetPost.num}\\s*\\n?`);
                         if (quotePatternForBot.test(rawReplyBody)) {
                            rawReplyBody = rawReplyBody.replace(quotePatternForBot, '').trim();
@@ -1011,10 +1045,12 @@ const runBotCycleCallback = useCallback(async () => {
 
                         addAutonomousBotActivityLog(`Bot generated (JSON) reply for >>${targetPost.num}: ${rawReplyBody.substring(0, 70)}...`);
 
+                        // Apply random delay
                         const replyDelay = Math.floor(Math.random() * (currentBotSettings.autonomousBotMaxReplyDelayMs - currentBotSettings.autonomousBotMinReplyDelayMs + 1)) + currentBotSettings.autonomousBotMinReplyDelayMs;
                         addAutonomousBotActivityLog(`Waiting for ${replyDelay}ms before posting reply...`, 'bot_activity');
                         await new Promise(resolve => window.setTimeout(resolve, replyDelay));
 
+                        // Optionally generate image for bot reply
                         let finalFileToPostForBot: File | null = null;
                         if (currentBotSettings.geminiReplyWithGeneratedImage) {
                             addLog(`Bot attempting to generate image for reply >>${targetPost.num}...`, 'gemini');
@@ -1028,26 +1064,29 @@ const runBotCycleCallback = useCallback(async () => {
                             } catch (imgErrBot) { addLog(`Bot image generation error for >>${targetPost.num}: ${(imgErrBot as Error).message}.`, 'bot_warning'); }
                         }
 
+                        // Step 4: Post to Dvach
                         try {
                             const newPostNum = await commonPostToDvach(finalCommentToPost, finalFileToPostForBot, false, botBoard, botThreadId, targetPost.num);
                             setSentMessages(prev => [{ num: newPostNum, timestamp: Date.now(), comment: finalCommentToPost, board: botBoard, thread: botThreadId, parent: targetPost.num, isGeminiPost: true, geminiTriggerPostNum: targetPost.num, geminiGeneratedImage: !!finalFileToPostForBot }, ...prev]);
 
+                            // Update conversation history with this interaction
                             const botReplyChatMessage: ChatMessage = { id: `model-reply-to-${targetPost.num}-${newPostNum}`, role: 'model', parts: [{text: rawReplyBody}], timestamp: Date.now() };
-                            const userMessageForHistory: ChatMessage = { id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMessageParts, timestamp: Date.now() - 100 };
+                            const userMessageForHistory: ChatMessage = { id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMessageParts, timestamp: Date.now() - 100 }; // timestamp slightly earlier
 
                             activeConversationForCycle = {
                                 ...activeConversationForCycle,
                                 participatingPostNumbers: [...activeConversationForCycle.participatingPostNumbers, targetPost.num, newPostNum],
-                                history: [...activeConversationForCycle.history.filter(m => m.id !== `user-dvach-${targetPost.num}`), userMessageForHistory, botReplyChatMessage],
+                                history: [...activeConversationForCycle.history.filter(m => m.id !== `user-dvach-${targetPost.num}`), userMessageForHistory, botReplyChatMessage], // Replace temp user prompt with final, add model reply
                                 lastBotReplyNum: newPostNum,
                                 status: 'active'
                             };
                             setAutonomousBotStatus(`Replied as >>${newPostNum} to >>${targetPost.num}`);
                         } catch (postError) {
                               const pe = postError as Error;
-                              if (pe.message.toLowerCase().includes("вы постите слишком быстро") || pe.message.includes("-8")) {
+                              if (pe.message.toLowerCase().includes("вы постите слишком быстро") || pe.message.includes("-8")) { // Dvach error for posting too fast
                                 addAutonomousBotActivityLog(`Posting error: Posting too fast. Skipping this reply. Consider increasing bot cycle interval.`, 'bot_warning', {message: pe.message});
-                              } else { throw pe; }
+                                // Don't mark convo as error, just couldn't post this one.
+                              } else { throw pe; } // Re-throw other post errors to be caught below
                         }
                     } else {
                         addAutonomousBotActivityLog(`Error parsing Gemini JSON response or replyText missing for >>${targetPost.num}. Response: ${textToParse.substring(0,200)}`, 'bot_warning', parsedReply);
@@ -1058,9 +1097,9 @@ const runBotCycleCallback = useCallback(async () => {
             } catch (geminiError) {
                 const errorMsg = (geminiError as Error).message;
                 let finalErrorMsg = errorMsg;
-                if (errorMsg && errorMsg.includes("got status: 429")) {
+                if (errorMsg && errorMsg.includes("got status: 429")) { // Handle rate limits specifically
                       try {
-                        const errorJsonMatch = errorMsg.match(/{.*}/s);
+                        const errorJsonMatch = errorMsg.match(/{.*}/s); // Try to parse JSON from error message
                         if (errorJsonMatch && errorJsonMatch[0]) {
                             const errorDetails = JSON.parse(errorJsonMatch[0]);
                             if (errorDetails.error?.status === "RESOURCE_EXHAUSTED") {
@@ -1073,26 +1112,33 @@ const runBotCycleCallback = useCallback(async () => {
                       } catch (parseErr) { addAutonomousBotActivityLog(`Gemini API error (parsing 429 message failed, in bot cycle): ${errorMsg}`, 'bot_error', geminiError); }
                 } else { addAutonomousBotActivityLog(`Gemini API error during bot reply generation: ${errorMsg}`, 'bot_error', geminiError); }
                 setAutonomousBotStatus(`Error: Gemini API issue for >>${targetPost.num}`);
-                activeConversationForCycle = { ...activeConversationForCycle, status: 'error' };
+                activeConversationForCycle = { ...activeConversationForCycle, status: 'error' }; // Mark conversation as errored
             }
         }
     } else if (currentBotSettings.autonomousBotReplyMode === 'replies_to_bot') {
+          // TODO: Implement logic for 'replies_to_bot'
+          // 1. Find bot's own posts (from sentMessages or by checking convo.lastBotReplyNum).
+          // 2. Check for new replies *to* those posts.
+          // 3. If new replies, construct context and call Gemini.
+          // 4. Post reply.
           addAutonomousBotActivityLog("Mode 'replies_to_bot' needs further development.", 'bot_warning');
     }
 
+    // Step 5: Update conversation state and schedule next cycle
     activeConversationForCycle.lastCheckedTimestamp = Date.now();
     setGeminiDvachConversations(prevConvos => new Map(prevConvos).set(currentBotTargetKeyForCycle, activeConversationForCycle));
 
     setAutonomousBotStatus(`Waiting (${currentBotSettings.autonomousBotCycleIntervalSeconds}s) /${botBoard}/${botThreadId}`);
     addAutonomousBotActivityLog("Bot cycle finished.", 'bot_activity');
 
+// Dependencies of runBotCycleCallback
 }, [
     ai, dvachSessionCookies, settings, addAutonomousBotActivityLog,
     setAutonomousBotStatus, geminiDvachConversations, setGeminiDvachConversations,
     sentMessages, setSentMessages, currentBotOpMediaCache, setCurrentBotOpMediaCache,
-    addLog,
-    commonPostToDvach, // commonPostToDvach itself depends on other state/props but is stable if its deps are listed correctly.
-    autonomousBotActive // Added to dependencies of runBotCycleCallback
+    addLog, // General addLog
+    commonPostToDvach, // commonPostToDvach is itself a callback
+    autonomousBotActive // To allow early exit if bot is stopped mid-execution by user
 ]);
 
 
@@ -1101,13 +1147,14 @@ useEffect(() => {
         if (autonomousBotIntervalRef.current) {
             window.clearInterval(autonomousBotIntervalRef.current);
             autonomousBotIntervalRef.current = null;
-            removeTask('bot_cycle');
+            removeTask('bot_cycle'); // Remove the generic bot_cycle task
         }
         setAutonomousBotStatus("Inactive - Bot Stopped");
-        setCurrentBotOpMediaCache(null);
+        setCurrentBotOpMediaCache(null); // Clear OP media cache when bot stops
         return;
     }
 
+    // Prerequisite checks before starting the bot
     if (!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) {
         let reason = "";
         if (!ai) reason = "Gemini AI not initialized";
@@ -1115,10 +1162,10 @@ useEffect(() => {
         else if (!settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) reason = "Target board/thread not set";
 
         setAutonomousBotStatus(`Inactive - ${reason}`);
-        if (autonomousBotActive) { // ensure we only log/set if it was trying to be active
+        if (autonomousBotActive) { // Log only if it was supposed to be active
              addLog(`Autonomous bot cannot run: ${reason}. Stopping.`, "bot_error");
         }
-        setAutonomousBotActive(false); // Ensure it's marked as inactive
+        setAutonomousBotActive(false); // Explicitly set to inactive
         return;
     }
 
@@ -1128,18 +1175,20 @@ useEffect(() => {
 
     // Run first cycle almost immediately then set interval
     const initialTimeoutId = window.setTimeout(() => {
-        if (autonomousBotActive) { // Check again before running
+        if (autonomousBotActive) { // Check if still active before running
            runBotCycleCallback();
         }
     }, 3000); // Small delay for UI to update, then first run
 
     const intervalId = window.setInterval(() => {
-      if (autonomousBotActive) {  // Check again before running each interval
+      if (autonomousBotActive) {  // Check if still active before running each interval
           runBotCycleCallback();
       } else { // If it became inactive during the interval, clear it.
-          window.clearInterval(autonomousBotIntervalRef.current!); // intervalRef.current should be set if this cb runs
-          autonomousBotIntervalRef.current = null;
-          removeTask(botTaskId); // Also remove the task if we clear interval this way
+          if(autonomousBotIntervalRef.current) {
+            window.clearInterval(autonomousBotIntervalRef.current);
+            autonomousBotIntervalRef.current = null;
+            removeTask(botTaskId); // Also remove the task if we clear interval this way
+          }
       }
     }, settings.autonomousBotCycleIntervalSeconds * 1000);
 
@@ -1147,14 +1196,17 @@ useEffect(() => {
 
     return () => {
         window.clearTimeout(initialTimeoutId);
-        window.clearInterval(intervalId); // Clear interval using the stored ID
+        if (autonomousBotIntervalRef.current) { // Check if ref has an ID before clearing
+           window.clearInterval(autonomousBotIntervalRef.current);
+        }
         autonomousBotIntervalRef.current = null;
         removeTask(botTaskId);
         addLog("Autonomous bot interval stopped (useEffect cleanup).", "bot_setup");
     };
-}, [ // Dependencies for starting/stopping the bot and its cycle configuration
+// Dependencies for starting/stopping the bot and its cycle configuration
+}, [
     autonomousBotActive,
-    runBotCycleCallback, // runBotCycleCallback itself has dependencies, ensure they are stable or included
+    runBotCycleCallback, // runBotCycleCallback itself has dependencies
     settings.autonomousBotCycleIntervalSeconds,
     settings.autonomousBotTargetBoard, // For initial check and logging
     settings.autonomousBotTargetThreadId, // For initial check and logging
@@ -1270,9 +1322,9 @@ useEffect(() => {
         setGeminiLabChatMessages(prev => [...prev, userMessage]);
         setGeminiLabPrompt('');
 
-        const streamResultPromise = chat.sendMessageStream({ message: currentLabPrompt });
-        // Await the promise to get the AsyncGenerator
-        const streamGenerator = await streamResultPromise;
+        const streamResultPromise = await chat.sendMessageStream({ message: currentLabPrompt });
+        // const streamGenerator = await streamResultPromise; // This was the previous attempt causing TS2504
+        const streamGenerator = streamResultPromise; // sendMessageStream returns the AsyncGenerator directly now (or a Promise that resolves to it quickly)
 
 
         const modelStreamingMessageID = `lab-model-stream-${Date.now()}`;
@@ -1303,21 +1355,36 @@ useEffect(() => {
         addLog(`Gemini Lab: ${feature} with prompt: "${currentLabPrompt.substring(0,50)}..." ${geminiLabImageForMultimodal ? `and image ${geminiLabImageForMultimodal.name}` : '' }`, 'gemini');
 
         if (feature === GeminiFeature.GENERATE_CONTENT_STREAM) {
-          const streamResponsePromise = ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
-          const streamResponse = await streamResponsePromise;
+          const streamResponse = await ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
+          // const streamResponse = await streamResponsePromise; // Removed based on TS2504 pattern
           let fullText = "";
+          // let finalAggregatedResponse: ActualGenerateContentResponse | null = null; // Removed, TS6133
           
           for await (const chunk of streamResponse) {
             fullText += chunk.text;
             setGeminiLabOutput(fullText);
-             const chunkAsCustom = chunk as CustomGenerateContentResponse;
+             // For streams, grounding might appear in chunks or in the aggregated response.
+             // The most reliable way for full grounding for streams is often after it completes.
+             // However, if the SDK provides it per chunk, this can be used.
+             const chunkAsCustom = chunk as CustomGenerateContentResponse; // Cast to check for grounding
              if (chunkAsCustom.candidates?.[0]?.groundingMetadata?.groundingAttribution) {
                 setGeminiLabGroundingSources(chunkAsCustom.candidates[0].groundingMetadata.groundingAttribution.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })));
              }
           }
           addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}.`, 'gemini');
+          // After loop, try to get aggregated response if SDK supports it for streams (some versions might)
+          // This pattern is more common for the 'google-gax' based libraries, @google/genai might be simpler.
+          // if (typeof (streamResponse as any).response === 'function') {
+          //   finalAggregatedResponse = await (streamResponse as any).response();
+          // } else if (typeof (streamResponse as any).response === 'object' && (streamResponse as any).response !== null) {
+          //    finalAggregatedResponse = (streamResponse as any).response; // if it's a direct property
+          // }
+          // if(finalAggregatedResponse && (finalAggregatedResponse as CustomGenerateContentResponse).candidates?.[0]?.groundingMetadata?.groundingAttribution){
+          //     setGeminiLabGroundingSources((finalAggregatedResponse as CustomGenerateContentResponse).candidates![0]!.groundingMetadata!.groundingAttribution!.map((ga: any) => ({ web: { uri: ga.content.uri, title: ga.content.title } })));
+          // }
 
-        } else {
+
+        } else { // Non-streaming Generate Content
           const response = await ai.models.generateContent({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig }) as CustomGenerateContentResponse;
           setGeminiLabOutput(response.text || "No text content received.");
           setGeminiLabGroundingSources(response.candidates?.[0]?.groundingMetadata?.groundingAttribution?.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })) || []);
@@ -1329,13 +1396,13 @@ useEffect(() => {
         const response = await ai.models.generateImages({
             model: GEMINI_IMAGE_MODEL,
             prompt: currentImageGenPrompt,
-            config: { numberOfImages: geminiLabNumImagesToGenerate, outputMimeType: 'image/jpeg' }
+            config: { numberOfImages: geminiLabNumImagesToGenerate, outputMimeType: 'image/jpeg' } // Safety settings not applicable here per API
         });
 
         const images: GeneratedImage[] = (response.generatedImages || [])
-            .filter(img => img.image?.imageBytes)
+            .filter(img => img.image?.imageBytes) // Ensure imageBytes exists
             .map(img => ({
-                base64Data: img.image!.imageBytes!,
+                base64Data: img.image!.imageBytes!, // Safe due to filter
                 mimeType: img.image!.mimeType || 'image/jpeg',
                 prompt: currentImageGenPrompt
             }));
