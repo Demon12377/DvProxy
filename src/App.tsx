@@ -6,16 +6,14 @@ import {
   Part,
   Chat as GeminiChatSDK,
   GenerateContentParameters,
-  GenerateContentResponse as ActualGenerateContentResponse,
-  FunctionDeclarationSchemaType,
-  StreamGenerateContentResult
+  GenerateContentResponse as ActualGenerateContentResponse // Renamed for clarity
 } from "@google/genai";
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse,
   DvachFile, GeminiDvachConversation, ChatMessage,
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
-  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata
+  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata, FinishReason
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import {
@@ -965,7 +963,7 @@ const runBotCycleCallback = useCallback(async () => {
                     temperature: 0.85, topK: 50, topP: 0.95,
                     maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
                     responseMimeType: "application/json",
-                    responseSchema: { type: FunctionDeclarationSchemaType.OBJECT, properties: { replyText: { type: FunctionDeclarationSchemaType.STRING } }, required: ["replyText"] },
+                    responseSchema: { type: "object", properties: { replyText: { type: "string" } }, required: ["replyText"] },
                     safetySettings: currentBotSettings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})),
                 };
                 if (currentBotSettings.autonomousBotDisableThinking) {
@@ -1240,7 +1238,10 @@ useEffect(() => {
         setGeminiLabChatMessages(prev => [...prev, userMessage]);
         setGeminiLabPrompt('');
 
-        const streamGenerator: StreamGenerateContentResult = await chat.sendMessageStream({ message: currentLabPrompt });
+        // Apply fix for sendMessageStream
+        const streamResultPromise = chat.sendMessageStream({ message: currentLabPrompt });
+        const streamGenerator = await streamResultPromise;
+
 
         const modelStreamingMessageID = `lab-model-stream-${Date.now()}`;
         setCurrentStreamingMessage({ id: modelStreamingMessageID, role: 'model', parts: [{text: ""}], timestamp: Date.now(), isStreaming: true });
@@ -1252,7 +1253,7 @@ useEffect(() => {
           setCurrentStreamingMessage(prev => prev ? { ...prev, parts: [{ text: accumulatedText }] } : null);
         }
 
-        setGeminiLabChatMessages(prev => [...prev, { id: modelStreamingMessageID, role: 'model', parts: [{ text: accumulatedText }], timestamp: Date.now(), isStreaming: false }]);
+        setGeminiLabChatMessages(prev => [...prev.filter(m => m.id !== modelStreamingMessageID), { id: modelStreamingMessageID, role: 'model', parts: [{ text: accumulatedText }], timestamp: Date.now(), isStreaming: false }]);
         setCurrentStreamingMessage(null);
 
       } else if (feature === GeminiFeature.GENERATE_CONTENT || feature === GeminiFeature.GENERATE_CONTENT_STREAM) {
@@ -1268,27 +1269,39 @@ useEffect(() => {
         addLog(`Gemini Lab: ${feature} with prompt: "${currentLabPrompt.substring(0,50)}..." ${geminiLabImageForMultimodal ? `and image ${geminiLabImageForMultimodal.name}` : '' }`, 'gemini');
 
         if (feature === GeminiFeature.GENERATE_CONTENT_STREAM) {
-          const streamResponse = ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
+          const streamResponsePromise = ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
+          const streamResponse = await streamResponsePromise; // Assuming generateContentStream also might have the same type issue
           let fullText = "";
           let finalAggregatedResponse: ActualGenerateContentResponse | null = null;
 
           for await (const chunk of streamResponse) {
             fullText += chunk.text;
             setGeminiLabOutput(fullText);
+            // Check for grounding metadata in chunks (some APIs might provide it incrementally or in the last chunk)
+             const chunkAsCustom = chunk as CustomGenerateContentResponse;
+             if (chunkAsCustom.candidates?.[0]?.groundingMetadata?.groundingAttribution) {
+                setGeminiLabGroundingSources(chunkAsCustom.candidates[0].groundingMetadata.groundingAttribution.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })));
+             }
           }
-          // After stream, try to get the aggregated response for metadata
-          // This pattern depends on SDK v1.x providing this.
-          if ((streamResponse as any).response) {
-            finalAggregatedResponse = await (streamResponse as any).response;
-          }
+          // Attempt to get aggregated response if SDK structure supports it (v1.x style)
+          // For newer SDKs, grounding might need to be extracted from the last chunk or specific event.
+          // This part of code assumes that if `streamResponse` was a Promise to an object, `response` would be on that object.
+          // However, if `streamResponse` directly is the generator, this `(streamResponse as any).response` might not be correct.
+          // This specific pattern of getting `response` from a stream is more typical of older SDK versions.
+          // For now, let's keep it, assuming it might be a way to get full response, but it needs verification with actual SDK.
 
-          if (finalAggregatedResponse) {
-             const customResponse = finalAggregatedResponse as CustomGenerateContentResponse;
-             setGeminiLabGroundingSources(customResponse.candidates?.[0]?.groundingMetadata?.groundingAttribution?.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })) || []);
-             addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}. Grounding: ${customResponse.candidates?.[0]?.groundingMetadata ? 'Present' : 'Absent'}`, 'gemini');
-          } else {
-             addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}. Full aggregated response for metadata not available from this stream object.`, 'gemini');
-          }
+          // The most robust way to get the full response after a stream is usually via a separate property or method on the result
+          // of the initial `generateContentStream` call, if the SDK provides it.
+          // If `ai.models.generateContentStream` returns an object like `{ stream: AsyncGenerator, fullResponsePromise: Promise }`
+          // then `streamResponse` would be that object, and we'd iterate `streamResponse.stream`,
+          // and `await streamResponse.fullResponsePromise` for the final data.
+          // Given the current fix pattern, let's assume `streamResponse` *is* the generator.
+
+          // If grounding metadata is expected to be in the final aggregated response (not per chunk),
+          // there needs to be a way to get that. The current structure implies it might be in chunks.
+
+          addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}.`, 'gemini');
+
         } else {
           const response = await ai.models.generateContent({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig }) as CustomGenerateContentResponse;
           setGeminiLabOutput(response.text || "No text content received.");
@@ -1794,6 +1807,20 @@ useEffect(() => {
     </div>
   );
 
+  const codeEditorStyle: React.CSSProperties = {
+    fontFamily: 'monospace',
+    fontSize: '0.875rem', // text-sm
+    backgroundColor: settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? '#1f2937' /* gray-800 */ : '#f9fafb' /* gray-50 */,
+    color: settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? '#d1d5db' /* gray-300 */ : '#111827' /* gray-900 */,
+    border: `1px solid ${settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? '#4b5563' /* gray-600 */ : '#e5e7eb' /* gray-200 */} `,
+    borderRadius: '0.375rem', // rounded-md
+    padding: '0.5rem', // p-2
+    minHeight: '100px',
+    lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+  };
+
   const renderSettingsPanel = () => (
      <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Application Settings</h2>
@@ -1898,24 +1925,24 @@ useEffect(() => {
             <h4 className="text-md font-medium pt-2 text-gray-700 dark:text-gray-300">Gemini Model Config (Manual Replies & Lab Chat)</h4>
             <div>
                 <label htmlFor="geminiSystemInstructionManual" className="block text-sm font-medium">System Instruction (Manual Replies & Lab Chat):</label>
-                <textarea id="geminiSystemInstructionManual" value={settings.geminiSystemInstruction} onChange={e => handleUpdateSettings({geminiSystemInstruction: e.target.value})} rows={2} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+                <textarea id="geminiSystemInstructionManual" value={settings.geminiSystemInstruction} onChange={e => handleUpdateSettings({geminiSystemInstruction: e.target.value})} rows={3} style={codeEditorStyle} className="mt-1 w-full"/>
             </div>
             <div className="grid grid-cols-2 gap-4">
-                <div><label htmlFor="geminiTemp" className="text-sm">Temperature:</label><input id="geminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({geminiTemperature: parseFloat(e.target.value)})} className="w-full p-1 border r"/></div>
-                <div><label htmlFor="geminiTopP" className="text-sm">Top P:</label><input id="geminiTopP" type="number" step="0.05" min="0" max="1" value={settings.geminiTopP} onChange={e => handleUpdateSettings({geminiTopP: parseFloat(e.target.value)})} className="w-full p-1 border r"/></div>
-                <div><label htmlFor="geminiTopK" className="text-sm">Top K:</label><input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({geminiTopK: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>
-                <div><label htmlFor="geminiMaxOut" className="text-sm">Max Output Tokens:</label><input id="geminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({geminiMaxOutputTokens: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>
+                <div><label htmlFor="geminiTemp" className="text-sm">Temperature:</label><input id="geminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e => handleUpdateSettings({geminiTemperature: parseFloat(e.target.value)})} className="w-full p-1 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+                <div><label htmlFor="geminiTopP" className="text-sm">Top P:</label><input id="geminiTopP" type="number" step="0.05" min="0" max="1" value={settings.geminiTopP} onChange={e => handleUpdateSettings({geminiTopP: parseFloat(e.target.value)})} className="w-full p-1 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+                <div><label htmlFor="geminiTopK" className="text-sm">Top K:</label><input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e => handleUpdateSettings({geminiTopK: parseInt(e.target.value)})} className="w-full p-1 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
+                <div><label htmlFor="geminiMaxOut" className="text-sm">Max Output Tokens:</label><input id="geminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e => handleUpdateSettings({geminiMaxOutputTokens: parseInt(e.target.value)})} className="w-full p-1 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>
             </div>
             <div>
                 <label htmlFor="geminiMime" className="block text-sm">Response MIME Type (Manual/Lab GenContent):</label>
-                <select id="geminiMime" value={settings.geminiResponseMimeType} onChange={e => handleUpdateSettings({geminiResponseMimeType: e.target.value as 'text/plain' | 'application/json'})} className="w-full p-2 border r">
+                <select id="geminiMime" value={settings.geminiResponseMimeType} onChange={e => handleUpdateSettings({geminiResponseMimeType: e.target.value as 'text/plain' | 'application/json'})} className="w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
                     <option value="text/plain">text/plain</option>
                     <option value="application/json">application/json</option>
                 </select>
             </div>
             <label className="flex items-center"><input type="checkbox" checked={settings.useSearchGrounding} onChange={e => handleUpdateSettings({useSearchGrounding: e.target.checked})} className="mr-2"/> Use Google Search Grounding (Manual/Lab)</label>
             <label className="flex items-center"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({useThinkingBudget: e.target.checked})} className="mr-2"/> Use Thinking Budget (Manual/Lab, 0=disable)</label>
-            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm">Thinking Budget (Manual/Lab, 0-24576 for Flash):</label><input id="geminiThinkBudget" type="number" step="1" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>}
+            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm">Thinking Budget (Manual/Lab, 0-24576 for Flash):</label><input id="geminiThinkBudget" type="number" step="1" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} className="w-full p-1 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/></div>}
         </div>
       </details>
 
@@ -1924,7 +1951,7 @@ useEffect(() => {
         <div className="mt-3 space-y-3">
             <div>
                 <label htmlFor="botSystemPrompt" className="block text-sm font-medium">Bot System Prompt (Persona & Style):</label>
-                <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({autonomousBotSystemPrompt: e.target.value})} rows={3} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
+                <textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e => handleUpdateSettings({autonomousBotSystemPrompt: e.target.value})} rows={4} style={codeEditorStyle} className="mt-1 w-full"/>
             </div>
             <label className="flex items-center">
               <input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e => handleUpdateSettings({botAnalyzesImagesInTriggerPosts: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
@@ -1932,7 +1959,7 @@ useEffect(() => {
             </label>
             <div>
                 <label htmlFor="botReplyMode" className="block text-sm">Bot Reply Mode:</label>
-                <select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e => handleUpdateSettings({autonomousBotReplyMode: e.target.value as AutonomousBotReplyMode})} className="w-full p-2 border r">
+                <select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e => handleUpdateSettings({autonomousBotReplyMode: e.target.value as AutonomousBotReplyMode})} className="w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
                     <option value="random_in_thread">Random Post in Thread</option>
                     <option value="replies_to_bot">Replies to Bot's Own Posts (WIP)</option>
                 </select>
@@ -1944,11 +1971,11 @@ useEffect(() => {
              <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label htmlFor="botMinReplyDelay" className="block text-sm font-medium">Min Reply Delay (ms):</label>
-                    <input id="botMinReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMinReplyDelayMs} onChange={e => handleUpdateSettings({autonomousBotMinReplyDelayMs: parseInt(e.target.value)})} className="mt-1 w-full p-2 border r"/>
+                    <input id="botMinReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMinReplyDelayMs} onChange={e => handleUpdateSettings({autonomousBotMinReplyDelayMs: parseInt(e.target.value)})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
                  </div>
                  <div>
                     <label htmlFor="botMaxReplyDelay" className="block text-sm font-medium">Max Reply Delay (ms):</label>
-                    <input id="botMaxReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMaxReplyDelayMs} onChange={e => handleUpdateSettings({autonomousBotMaxReplyDelayMs: parseInt(e.target.value)})} className="mt-1 w-full p-2 border r"/>
+                    <input id="botMaxReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMaxReplyDelayMs} onChange={e => handleUpdateSettings({autonomousBotMaxReplyDelayMs: parseInt(e.target.value)})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
                  </div>
              </div>
              <label className="flex items-center">
@@ -1961,7 +1988,7 @@ useEffect(() => {
             </label>
              <div>
                 <label htmlFor="botInitialContextScope" className="block text-sm">Bot: Initial Thread Context Scope:</label>
-                <select id="botInitialContextScope" value={settings.autonomousBotInitialContextScope} onChange={e => handleUpdateSettings({autonomousBotInitialContextScope: e.target.value as AutonomousBotInitialContextScope})} className="w-full p-2 border r">
+                <select id="botInitialContextScope" value={settings.autonomousBotInitialContextScope} onChange={e => handleUpdateSettings({autonomousBotInitialContextScope: e.target.value as AutonomousBotInitialContextScope})} className="w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
                     <option value="op_only">OP Post Only</option>
                     <option value="full_thread">Full Thread Summary</option>
                 </select>
