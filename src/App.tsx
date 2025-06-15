@@ -1,19 +1,19 @@
 
 /// <reference types="vite/client" />
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react'; // Removed useMemo
 import {
   GoogleGenAI,
   Part,
   Chat as GeminiChatSDK,
   GenerateContentParameters
-  // Removed: GenerateContentResponse as ActualGenerateContentResponse
 } from "@google/genai";
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse,
   DvachFile, GeminiDvachConversation, ChatMessage,
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
-  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata, FinishReason
+  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata
+  // Removed FinishReason from here
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import {
@@ -1322,9 +1322,9 @@ useEffect(() => {
         setGeminiLabChatMessages(prev => [...prev, userMessage]);
         setGeminiLabPrompt('');
 
-        const streamResultPromise = await chat.sendMessageStream({ message: currentLabPrompt });
+        // const streamResultPromise = await chat.sendMessageStream({ message: currentLabPrompt });
         // const streamGenerator = await streamResultPromise; // This was the previous attempt causing TS2504
-        const streamGenerator = streamResultPromise; // sendMessageStream returns the AsyncGenerator directly now (or a Promise that resolves to it quickly)
+        const streamGenerator = await chat.sendMessageStream({ message: currentLabPrompt }); // sendMessageStream returns the AsyncGenerator directly now (or a Promise that resolves to it quickly)
 
 
         const modelStreamingMessageID = `lab-model-stream-${Date.now()}`;
@@ -1355,34 +1355,20 @@ useEffect(() => {
         addLog(`Gemini Lab: ${feature} with prompt: "${currentLabPrompt.substring(0,50)}..." ${geminiLabImageForMultimodal ? `and image ${geminiLabImageForMultimodal.name}` : '' }`, 'gemini');
 
         if (feature === GeminiFeature.GENERATE_CONTENT_STREAM) {
-          const streamResponse = await ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
-          // const streamResponse = await streamResponsePromise; // Removed based on TS2504 pattern
+          const streamResponsePromise = ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
+          const streamResponse = await streamResponsePromise;
           let fullText = "";
           // let finalAggregatedResponse: ActualGenerateContentResponse | null = null; // Removed, TS6133
           
           for await (const chunk of streamResponse) {
             fullText += chunk.text;
             setGeminiLabOutput(fullText);
-             // For streams, grounding might appear in chunks or in the aggregated response.
-             // The most reliable way for full grounding for streams is often after it completes.
-             // However, if the SDK provides it per chunk, this can be used.
-             const chunkAsCustom = chunk as CustomGenerateContentResponse; // Cast to check for grounding
+             const chunkAsCustom = chunk as CustomGenerateContentResponse; 
              if (chunkAsCustom.candidates?.[0]?.groundingMetadata?.groundingAttribution) {
                 setGeminiLabGroundingSources(chunkAsCustom.candidates[0].groundingMetadata.groundingAttribution.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })));
              }
           }
           addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}.`, 'gemini');
-          // After loop, try to get aggregated response if SDK supports it for streams (some versions might)
-          // This pattern is more common for the 'google-gax' based libraries, @google/genai might be simpler.
-          // if (typeof (streamResponse as any).response === 'function') {
-          //   finalAggregatedResponse = await (streamResponse as any).response();
-          // } else if (typeof (streamResponse as any).response === 'object' && (streamResponse as any).response !== null) {
-          //    finalAggregatedResponse = (streamResponse as any).response; // if it's a direct property
-          // }
-          // if(finalAggregatedResponse && (finalAggregatedResponse as CustomGenerateContentResponse).candidates?.[0]?.groundingMetadata?.groundingAttribution){
-          //     setGeminiLabGroundingSources((finalAggregatedResponse as CustomGenerateContentResponse).candidates![0]!.groundingMetadata!.groundingAttribution!.map((ga: any) => ({ web: { uri: ga.content.uri, title: ga.content.title } })));
-          // }
-
 
         } else { // Non-streaming Generate Content
           const response = await ai.models.generateContent({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig }) as CustomGenerateContentResponse;
