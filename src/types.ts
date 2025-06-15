@@ -195,7 +195,7 @@ export interface AppSettings {
   geminiReplyWithGeneratedImage: boolean;
   maxImagesToAnalyzePerPost: number;
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
-  geminiSafetySettings: SafetySettingRule[];
+  geminiSafetySettings: SafetySettingRule[]; // Added
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string;
@@ -205,14 +205,14 @@ export interface AppSettings {
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number;
   autonomousBotAllowReplyToSelf: boolean;
-  autonomousBotInitialContextScope: AutonomousBotInitialContextScope;
+  autonomousBotInitialContextScope: AutonomousBotInitialContextScope; // Added
   autonomousBotFullThreadContextMaxChars: number;
   autonomousBotMinReplyDelayMs: number;
   autonomousBotMaxReplyDelayMs: number;
   autonomousBotDisableThinking: boolean;
 
   // Gemini Model Configuration (for Manual Gemini Replies to Dvach posts)
-  geminiSystemInstruction: string; // System instruction for Manual Gemini Replies
+  geminiSystemInstruction: string; // System instruction for Manual Gemini Replies - Added
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;

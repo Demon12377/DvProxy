@@ -15,7 +15,7 @@ import {
   // GroundingMetadata (unused) removed
 } from './types';
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
-import { parseGeminiJsonResponse } from './services/geminiService';
+import { parseGeminiJsonResponse } from './services/geminiService'; // Changed to extension-less
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
   GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
@@ -24,8 +24,8 @@ import {
   BUMP_KEYWORDS,
   AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
   DEFAULT_APP_SETTINGS
-} from '../constants';
-import { generateUserAgent } from '../utils/userAgentGenerator';
+} from './constants'; // Assuming this correctly points to src/constants.ts based on file content
+import { generateUserAgent } from '../utils/userAgentGenerator'; // Correct path to root utils
 
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu,
@@ -90,6 +90,9 @@ const App: React.FC = () => {
     mergedInitialSettings.autonomousBotInitialContextScope = loadedSettings.autonomousBotInitialContextScope || DEFAULT_APP_SETTINGS.autonomousBotInitialContextScope;
     mergedInitialSettings.geminiSafetySettings = loadedSettings.geminiSafetySettings || DEFAULT_APP_SETTINGS.geminiSafetySettings;
     mergedInitialSettings.userAgent = loadedSettings.userAgent || generateUserAgent();
+    // Ensure newly added settings have defaults if not in loadedSettings
+    mergedInitialSettings.geminiSystemInstruction = loadedSettings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
+
 
     return mergedInitialSettings;
   });
@@ -719,7 +722,7 @@ const runBotCycleCallback = useCallback(async () => {
             const eligiblePostsForReply = allPostsInThread.filter(p =>
                 p.num !== opPost.num && // Don't reply to OP itself in this mode
                 (!sentMessages.some(sm => sm.num === p.num && sm.isGeminiPost && sm.board === botBoard && sm.thread === botThreadId) || currentBotSettings.autonomousBotAllowReplyToSelf) && // Not replied by bot or allow self-reply
-                !BUMP_KEYWORDS.some(kw => p.comment.toLowerCase().includes(kw)) && // Not a bump post
+                !BUMP_KEYWORDS.some((kw: string) => p.comment.toLowerCase().includes(kw)) && // Not a bump post, added explicit type for kw
                 !activeConversationForCycle.participatingPostNumbers.includes(p.num) // Not already part of this conversation cycle
             );
 
