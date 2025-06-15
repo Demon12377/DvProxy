@@ -87,25 +87,23 @@ export async function getThreadData(
 
   let fetchUrl: string;
   let targetDvachUrl: string | undefined; 
+  const requestHeaders: HeadersInit = { 'Accept': 'application/json' };
 
   if (proxyModeForGET === 'vercel_serverless') {
     // Note: /api/get-thread internally targets 2ch.hk, this client-setting doesn't change that serverless function's target.
     fetchUrl = `/api/get-thread?board=${encodeURIComponent(board)}&thread=${encodeURIComponent(threadId)}`;
-    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.hk)`);
+    requestHeaders['X-User-Agent'] = userAgent; // Pass User-Agent to our serverless function
+    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.hk, UA: ${userAgent})`);
   } else {
     targetDvachUrl = `${baseDvachDomain}/${board}/res/${threadId}.json`; 
     fetchUrl = buildProxiedGetUrl(targetDvachUrl, proxyModeForGET, customProxyUrlForGET);
-    console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetDvachUrl})`);
+    requestHeaders['User-Agent'] = userAgent; // User-Agent for direct/external proxy calls
+    console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetDvachUrl}, UA: ${userAgent})`);
   }
   
   let response;
   try {
-    response = await fetch(fetchUrl, {
-      headers: {
-        ...(proxyModeForGET !== 'vercel_serverless' && { 'User-Agent': userAgent }), // User-Agent not needed for our own /api endpoint
-        'Accept': 'application/json',
-      }
-    });
+    response = await fetch(fetchUrl, { headers: requestHeaders });
   } catch (networkError) {
     console.error(`[dvachService/getThreadData] Network error fetching ${fetchUrl}:`, networkError);
     throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}`);
@@ -150,7 +148,7 @@ export async function loginToDvach(
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachSessionCookies> {
   // This function uses /api/dvach-login, which internally targets 2ch.hk
-  console.info('[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login (targets 2ch.hk)...');
+  console.info(`[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login (targets 2ch.hk, UA: ${userAgent})...`);
   
   let response;
   try {
@@ -158,7 +156,7 @@ export async function loginToDvach(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json', 
-        'X-User-Agent': userAgent, 
+        'X-User-Agent': userAgent, // This is correctly passed to the serverless function
       },
       body: JSON.stringify({ purchased_passcode: purchasedPasscode }),
     });
@@ -202,7 +200,7 @@ export async function postWithSessionCookie(
     throw new Error("passcode_auth session cookie is missing. Cannot post. Please login.");
   }
   // This function uses /api/dvach-post, which internally targets 2ch.hk
-  console.info('[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post (targets 2ch.hk). Params:', { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
+  console.info(`[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post (targets 2ch.hk, UA: ${userAgent}). Params:`, { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
   
   const formData = new FormData();
   formData.append('passcode_auth_cookie_value', sessionCookies.passcode_auth);
@@ -228,7 +226,7 @@ export async function postWithSessionCookie(
     response = await fetch('/api/dvach-post', {
       method: 'POST',
       headers: {
-        'X-User-Agent': userAgent, 
+        'X-User-Agent': userAgent, // This is correctly passed to the serverless function
       },
       body: formData, 
     });
