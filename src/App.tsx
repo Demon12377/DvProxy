@@ -1,13 +1,13 @@
 
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GoogleGenAI, Part, Type, GenerateContentParameters, GenerateContentResponse, Chat as GeminiChat } from "@google/genai"; 
+import { GoogleGenAI, Part, Type, GenerateContentParameters, GenerateContentResponse, Chat as GeminiChat, FinishReason } from "@google/genai"; 
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse, 
   DvachFile, GeminiDvachConversation, ChatMessage, 
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
-  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask
+  GeminiFeature, GroundingChunk, GeneratedImage, CustomGenerateContentResponse, ActiveTask, GroundingMetadata // Added GroundingMetadata
 } from './types'; 
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import { 
@@ -24,7 +24,7 @@ import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu, 
   IconSparkles, IconAlertTriangle, IconRefresh, 
   IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat,
-  IconSun, IconMoon, IconPhoto, IconCloudUpload, IconFileText, IconSearch, IconEye, IconClock
+  IconSun, IconMoon, IconPhoto, IconFileText, IconClock
 } from './components/Icons'; 
 
 // Ensure VITE_GEMINI_API_KEY is read correctly from import.meta.env
@@ -310,6 +310,24 @@ const App: React.FC = () => {
   const addAutonomousBotActivityLog = useCallback((message: string, mainLogType: LogEntry['type'] = 'bot_activity', data?: unknown) => {
     setAutonomousBotActivityLog(prev => [ `[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 49)]);
      addLog(message, mainLogType, data);
+  }, [addLog]);
+
+  const addTask = useCallback((type: ActiveTask['type'], description: string, stop?: () => void): string => {
+    const id = `${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newTask: ActiveTask = { id, type, description, startTime: Date.now(), stop };
+    setActiveTasks(prevTasks => [...prevTasks, newTask]);
+    addLog(`Task started: ${type} - ${description}`, 'system', { taskId: id });
+    return id;
+  }, [addLog]);
+
+  const removeTask = useCallback((id: string) => {
+    setActiveTasks(prevTasks => {
+      const taskToRemove = prevTasks.find(t => t.id === id);
+      if (taskToRemove) {
+        addLog(`Task ended: ${taskToRemove.type} - ${taskToRemove.description}`, 'system', { taskId: id, durationMs: Date.now() - taskToRemove.startTime });
+      }
+      return prevTasks.filter(task => task.id !== id);
+    });
   }, [addLog]);
 
 
@@ -689,7 +707,6 @@ const App: React.FC = () => {
               config: { 
                 numberOfImages: 1, 
                 outputMimeType: 'image/jpeg',
-                // safetySettings removed as it's not a valid property here
               } 
             });
             if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
@@ -1046,7 +1063,10 @@ const runBotCycleCallback = useCallback(async () => {
 }, [
     ai, dvachSessionCookies, settings, addAutonomousBotActivityLog,
     setAutonomousBotStatus, geminiDvachConversations, setGeminiDvachConversations, 
-    sentMessages, setSentMessages, currentBotOpMediaCache, setCurrentBotOpMediaCache
+    sentMessages, setSentMessages, currentBotOpMediaCache, setCurrentBotOpMediaCache,
+    addLog, // Added addLog as it's used inside directly
+    buildProxiedGetUrl, // Added as it's used inside
+    commonPostToDvach, // Added as it's used inside
 ]);
 
 
@@ -1056,7 +1076,7 @@ useEffect(() => {
         if (autonomousBotIntervalRef.current) {
             window.clearInterval(autonomousBotIntervalRef.current);
             autonomousBotIntervalRef.current = null;
-            removeTask('bot_cycle'); // Use the correct task type
+            removeTask('bot_cycle'); 
         }
         setAutonomousBotStatus("Inactive - Bot Stopped");
         setCurrentBotOpMediaCache(null); 
@@ -1095,7 +1115,7 @@ useEffect(() => {
         window.clearTimeout(initialTimeoutId);
         window.clearInterval(intervalId);
         autonomousBotIntervalRef.current = null;
-        removeTask('bot_cycle'); // Use the correct task type
+        removeTask('bot_cycle'); 
         addLog("Autonomous bot interval stopped (useEffect cleanup).", "bot_setup");
     };
 }, [
@@ -1107,8 +1127,8 @@ useEffect(() => {
     dvachSessionCookies, 
     settings.autonomousBotTargetBoard, 
     settings.autonomousBotTargetThreadId,
-    addTask, // Added missing dependency
-    removeTask // Added missing dependency
+    addTask, 
+    removeTask 
 ]);
 
   const toggleTheme = () => {
@@ -1143,10 +1163,6 @@ useEffect(() => {
     const file = event.target.files?.[0];
     if (file) {
       addLog(`File "${file.name}" selected for generic upload. This uploader is a placeholder.`, 'info', { name: file.name, size: file.size });
-      // Example usage:
-      // const lines = await readFileContent(file);
-      // setter(lines);
-      // addLog(`File "${file.name}" content read (first 5 lines):`, 'info', lines.slice(0,5));
     }
   };
   
@@ -1161,10 +1177,6 @@ useEffect(() => {
   };
 
 
-  const runKeywordReply = useCallback(async () => { 
-    addLog('runKeywordReply function (old bot logic) is not applicable to the current autonomous bot structure.', 'warning');
-  }, [addLog]);
-
   // Gemini Lab Actions
   const handleGeminiAction = useCallback(async (feature: GeminiFeature) => {
     if (!ai) { addLog('Gemini AI not initialized. Check API Key.', 'error'); return; }
@@ -1174,7 +1186,12 @@ useEffect(() => {
 
     const currentLabPrompt = geminiLabPrompt.trim();
     const currentImageGenPrompt = geminiLabImageGenPrompt.trim();
-    const taskId = addTask('gemini_request', `Gemini Lab: ${feature} - Prompt: "${(feature === GeminiFeature.IMAGE_GENERATION ? currentImageGenPrompt : currentLabPrompt).substring(0, 30)}..."`, () => setGeminiLoading(false));
+    const taskDesc = feature === GeminiFeature.IMAGE_GENERATION ? currentImageGenPrompt : currentLabPrompt;
+    const taskId = addTask('gemini_request', `Gemini Lab: ${feature} - Prompt: "${taskDesc.substring(0, 30)}..."`, () => {
+      setGeminiLoading(false); 
+      // Add logic here if you need to specifically stop/cancel a Gemini request.
+      // For simple cases, just setting loading to false might be enough.
+    });
 
     try {
       const baseConfig: GenerateContentParameters['config'] = {
@@ -1182,7 +1199,7 @@ useEffect(() => {
         topP: settings.geminiTopP,
         topK: settings.geminiTopK,
         maxOutputTokens: settings.geminiMaxOutputTokens,
-        responseMimeType: settings.geminiResponseMimeType, // Note: Not applicable for image generation
+        responseMimeType: settings.geminiResponseMimeType,
         safetySettings: settings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any })),
       };
       if(settings.useThinkingBudget && feature !== GeminiFeature.IMAGE_GENERATION) {
@@ -1205,16 +1222,16 @@ useEffect(() => {
           chat = ai.chats.create({ 
             model: GEMINI_TEXT_MODEL, 
             config: { systemInstruction: settings.geminiSystemInstruction, safetySettings: baseConfig.safetySettings },
-            history: geminiLabChatMessages.map(m => ({ role: m.role, parts: m.parts })) // Convert app history to SDK history
+            history: geminiLabChatMessages.map(m => ({ role: m.role, parts: m.parts })) 
           });
           setCurrentGeminiLabChat(chat);
         }
 
         const userMessage: ChatMessage = { id: `lab-user-${Date.now()}`, role: 'user', parts: [{text: currentLabPrompt}], timestamp: Date.now(), isLoading: true };
         setGeminiLabChatMessages(prev => [...prev, userMessage]);
-        setGeminiLabPrompt(''); // Clear input after sending
+        setGeminiLabPrompt(''); 
 
-        const streamResponse = await chat.sendMessageStream({ message: currentLabPrompt });
+        const streamResult = await chat.sendMessageStream({ message: currentLabPrompt });
         
         const modelStreamingMessage: ChatMessage = { id: `lab-model-stream-${Date.now()}`, role: 'model', parts: [{text: ""}], timestamp: Date.now(), isStreaming: true };
         setCurrentStreamingMessage(modelStreamingMessage);
@@ -1222,12 +1239,12 @@ useEffect(() => {
 
 
         let accumulatedText = "";
-        for await (const chunk of streamResponse) {
+        for await (const chunk of streamResult) {
           accumulatedText += chunk.text;
           setCurrentStreamingMessage(prev => prev ? { ...prev, parts: [{ text: accumulatedText }] } : null);
         }
         
-        if (currentStreamingMessage) { // Ensure it hasn't been cleared by clearChatHistory
+        if (currentStreamingMessage) { 
              setGeminiLabChatMessages(prev => [...prev.filter(m => m.id !== modelStreamingMessage.id), { ...modelStreamingMessage, parts: [{ text: accumulatedText }], isStreaming: false }]);
         }
         setCurrentStreamingMessage(null);
@@ -1247,17 +1264,22 @@ useEffect(() => {
         if (feature === GeminiFeature.GENERATE_CONTENT_STREAM) {
           const streamResponse = await ai.models.generateContentStream({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig });
           let fullText = "";
-          for await (const chunk of streamResponse) {
+          let lastChunk: CustomGenerateContentResponse | null = null;
+          for await (const chunk of streamResponse) { 
             fullText += chunk.text;
-            setGeminiLabOutput(fullText); // Update UI incrementally
+            setGeminiLabOutput(fullText); 
+            lastChunk = chunk as CustomGenerateContentResponse;
           }
-          const finalResponse = await streamResponse.response;
-          setGeminiLabGroundingSources(finalResponse.candidates?.[0]?.groundingMetadata?.groundingAttribution?.map(ga => ({ web: { uri: ga.content.uri, title: ga.content.title } })) || []);
-          addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}`, 'gemini');
-        } else { // GENERATE_CONTENT
+          if (lastChunk) {
+            setGeminiLabGroundingSources(lastChunk.candidates?.[0]?.groundingMetadata?.groundingAttribution?.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })) || []);
+            addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}. Grounding: ${lastChunk.candidates?.[0]?.groundingMetadata ? 'Present' : 'Absent'}`, 'gemini');
+          } else {
+            addLog(`Gemini Lab (Stream) response received. Length: ${fullText.length}. No chunks processed or stream was empty.`, 'gemini');
+          }
+        } else { 
           const response = await ai.models.generateContent({ model: GEMINI_TEXT_MODEL, contents: [{role: 'user', parts: contentParts}], config: baseConfig }) as CustomGenerateContentResponse;
           setGeminiLabOutput(response.text || "No text content received.");
-          setGeminiLabGroundingSources(response.candidates?.[0]?.groundingMetadata?.groundingAttribution?.map(ga => ({ web: { uri: ga.content.uri, title: ga.content.title } })) || []);
+          setGeminiLabGroundingSources(response.candidates?.[0]?.groundingMetadata?.groundingAttribution?.map((ga: NonNullable<NonNullable<GroundingMetadata['groundingAttribution']>[0]>) => ({ web: { uri: ga.content.uri, title: ga.content.title } })) || []);
           addLog(`Gemini Lab (Generate) response received. Length: ${response.text?.length || 0}`, 'gemini');
         }
       } else if (feature === GeminiFeature.IMAGE_GENERATION) {
@@ -1266,14 +1288,18 @@ useEffect(() => {
         const response = await ai.models.generateImages({
             model: GEMINI_IMAGE_MODEL,
             prompt: currentImageGenPrompt,
-            config: { numberOfImages: geminiLabNumImagesToGenerate, outputMimeType: 'image/jpeg' } // safetySettings removed
+            config: { numberOfImages: geminiLabNumImagesToGenerate, outputMimeType: 'image/jpeg' }
         });
-        const images: GeneratedImage[] = response.generatedImages.map(img => ({
-            base64Data: img.image.imageBytes,
-            mimeType: img.image.mimeType || 'image/jpeg',
-            prompt: currentImageGenPrompt
-        }));
-        setGeminiLabOutput(images); // For display in the lab output area
+
+        const images: GeneratedImage[] = (response.generatedImages || [])
+            .filter(img => img.image?.imageBytes)
+            .map(img => ({
+                base64Data: img.image!.imageBytes!, 
+                mimeType: img.image!.mimeType || 'image/jpeg',
+                prompt: currentImageGenPrompt
+            }));
+
+        setGeminiLabOutput(images); 
         addLog(`Gemini Lab: ${images.length} image(s) generated.`, 'gemini');
       }
     } catch (error) {
@@ -1514,7 +1540,7 @@ useEffect(() => {
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[80%] p-2.5 rounded-lg shadow ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-100'}`}>
                         <p className="text-xs font-semibold capitalize mb-0.5">{msg.role} {msg.isLoading ? '(Sending...)' : ''}</p>
-                        <div className="prose prose-sm dark:prose-invert max-w-none break-words whitespace-pre-wrap">{msg.parts[0]?.text || '[Non-text content]'}</div>
+                         <div className="prose prose-sm dark:prose-invert max-w-none break-words whitespace-pre-wrap">{msg.parts[0]?.text || '[Non-text content]'}</div>
                         {msg.imagePreview && <img src={msg.imagePreview} alt="Preview" className="mt-1.5 rounded max-w-xs max-h-32 object-contain"/>}
                     </div>
                 </div>
@@ -1873,7 +1899,7 @@ useEffect(() => {
             </div>
             <label className="flex items-center"><input type="checkbox" checked={settings.useSearchGrounding} onChange={e => handleUpdateSettings({useSearchGrounding: e.target.checked})} className="mr-2"/> Use Google Search Grounding (Manual/Lab)</label>
             <label className="flex items-center"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e => handleUpdateSettings({useThinkingBudget: e.target.checked})} className="mr-2"/> Use Thinking Budget (Manual/Lab, 0=disable)</label>
-            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm">Thinking Budget (Manual/Lab, 0-1):</label><input id="geminiThinkBudget" type="number" step="1" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>}
+            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm">Thinking Budget (Manual/Lab, 0-24576 for Flash):</label><input id="geminiThinkBudget" type="number" step="1" min="0" value={settings.geminiThinkingBudget} onChange={e => handleUpdateSettings({geminiThinkingBudget: parseInt(e.target.value)})} className="w-full p-1 border r"/></div>}
         </div>
       </details>
 
