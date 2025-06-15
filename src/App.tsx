@@ -1,4 +1,3 @@
-
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -25,8 +24,8 @@ import {
   BUMP_KEYWORDS,
   AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
   DEFAULT_APP_SETTINGS
-} from './constants';
-import { generateUserAgent } from './utils/userAgentGenerator';
+} from '../constants';
+import { generateUserAgent } from '../utils/userAgentGenerator';
 
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu,
