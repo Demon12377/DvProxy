@@ -1,3 +1,4 @@
+
 // constants.ts - Store widely used, unchanging values for the application.
 import { SafetySettingRule } from './types';
 
@@ -9,13 +10,14 @@ export const PROXY_URL_CODETABS_BASE = "https://api.codetabs.com/v1/proxy?quest=
 
 
 // Keys for localStorage items
-export const APP_SETTINGS_KEY = "dvach_gemini_app_settings_v2.10_bot_stable"; 
-export const SENT_MESSAGES_KEY = "dvach_gemini_sent_messages_v2.10_bot_stable";
-export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.10_bot_stable";
+export const APP_SETTINGS_KEY = "dvach_gemini_app_settings_v2.11_streaming_lab"; 
+export const SENT_MESSAGES_KEY = "dvach_gemini_sent_messages_v2.11_streaming_lab";
+export const GEMINI_DVACH_CONVERSATIONS_KEY = "gemini_dvach_conversations_v2.11_streaming_lab";
 export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1";
+export const GEMINI_LAB_CHAT_HISTORY_KEY = "gemini_lab_chat_history_v2.11";
 
 
-export const APP_VERSION = "2.10.0"; 
+export const APP_VERSION = "2.11.0"; 
 export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
 export const AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS = 8000; // Increased for autonomous bot

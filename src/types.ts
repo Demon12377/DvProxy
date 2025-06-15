@@ -1,5 +1,6 @@
+
 /// <reference types="vite/client" />
-import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason, HarmCategory as GenAIHarmCategory, HarmBlockThreshold as GenAIHarmBlockThreshold } from "@google/genai";
+import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason } from "@google/genai";
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -207,12 +208,12 @@ export interface AppSettings {
   autonomousBotAllowReplyToSelf: boolean; 
   autonomousBotInitialContextScope: AutonomousBotInitialContextScope;
   autonomousBotFullThreadContextMaxChars: number; 
-  autonomousBotMinReplyDelayMs: number; // New
-  autonomousBotMaxReplyDelayMs: number; // New
-  autonomousBotDisableThinking: boolean; // New
+  autonomousBotMinReplyDelayMs: number; 
+  autonomousBotMaxReplyDelayMs: number; 
+  autonomousBotDisableThinking: boolean; 
 
   // Gemini Model Configuration (mainly for manual replies; bot might use simplified or system prompt dictates style)
-  geminiSystemInstruction: string; // For manual replies primarily
+  geminiSystemInstruction: string; // For manual replies primarily & Gemini Lab Chat
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
@@ -243,6 +244,14 @@ export interface LogEntry {
   data?: unknown; 
 }
 
+export enum GeminiFeature {
+  GENERATE_CONTENT = "generateContent",
+  GENERATE_CONTENT_STREAM = "generateContentStream", // For standalone streaming
+  CHAT = "chat", // For streaming chat
+  IMAGE_GENERATION = "imageGeneration",
+}
+
+
 export interface ChatMessage { 
   id: string; 
   role: 'user' | 'model' | 'system'; 
@@ -250,6 +259,7 @@ export interface ChatMessage {
   timestamp: number;
   imagePreview?: string; 
   isLoading?: boolean; 
+  isStreaming?: boolean; // To indicate this message is currently being streamed
 }
 
 export type GeminiChatInstance = GeminiChatInstanceTypeSDK; // Use SDK type
@@ -321,4 +331,12 @@ export interface BotOpMediaCache {
   opPostNum: string; // OP post number
   mediaParts: Part[]; // Processed Gemini Parts for OP media
   mediaContextText: string; // A textual description/summary of the OP media for prompts
+}
+
+export interface ActiveTask {
+  id: string;
+  type: 'bot_cycle' | 'gemini_request' | 'dvach_post';
+  description: string;
+  startTime: number;
+  stop?: () => void; // Optional function to attempt to stop the task
 }
