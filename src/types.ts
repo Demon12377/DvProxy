@@ -207,6 +207,7 @@ export interface AppSettings {
   botAnalyzesImagesInTriggerPosts: boolean;
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number;
+  autonomousBotMinPostIntervalSeconds: number; // New setting for bot posting cooldown
   autonomousBotAllowReplyToSelf: boolean;
   autonomousBotInitialContextScope: AutonomousBotInitialContextScope; 
   autonomousBotFullThreadContextMaxChars: number;

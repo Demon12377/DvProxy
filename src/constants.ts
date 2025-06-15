@@ -71,10 +71,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
-  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда. Твои ответы должны быть остроумными, ироничными или информативными, в зависимости от контекста. Пиши в стиле, характерном для имиджбордов. Ты должен ответить в формате JSON { \"replyText\": \"твой ответ\" }.",
+  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда. Твои ответы должны быть остроумными, ироничными или информативными, в зависимости от контекста. Пиши в стиле, характерном для имиджбордов. Обращай внимание на историю беседы, включая свои предыдущие сообщения, чтобы избегать повторений и давать разнообразные ответы. Ты должен ответить в формате JSON { \"replyText\": \"твой ответ\" }.",
   botAnalyzesImagesInTriggerPosts: true,
   autonomousBotReplyMode: 'random_in_thread',
   autonomousBotCycleIntervalSeconds: 75,
+  autonomousBotMinPostIntervalSeconds: 60,
   autonomousBotAllowReplyToSelf: false,
   autonomousBotInitialContextScope: 'op_only',
   autonomousBotFullThreadContextMaxChars: 5000,
