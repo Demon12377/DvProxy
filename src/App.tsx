@@ -195,11 +195,57 @@ const App: React.FC = () => {
   }, [sentMessages]);
 
   useEffect(() => {
-    const storableConversations = Array.from(geminiDvachConversations.entries()).map(([key, convo]) => {
-        return [key, { ...convo, history: convo.history }];
-    });
-    localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(storableConversations));
-  }, [geminiDvachConversations]);
+    try {
+      const storableConversations = Array.from(geminiDvachConversations.entries()).map(([key, convo]) => {
+        const storableHistory = convo.history.map(chatMessage => {
+          const storableParts = chatMessage.parts.map(part => {
+            if (part.inlineData && typeof part.inlineData.data === 'string') { // Check if data is string
+              return {
+                inlineData: {
+                  mimeType: part.inlineData.mimeType,
+                  data: `[Inline data omitted for localStorage: ${part.inlineData.mimeType}, original data length: ${part.inlineData.data.length}]`
+                }
+              };
+            }
+            return part;
+          });
+          return { ...chatMessage, parts: storableParts, imagePreview: undefined }; // Remove imagePreview
+        });
+
+        let storableInitialContext = convo.initialContext;
+        if (convo.initialContext?.opPostMediaParts) {
+            const storableOpMediaParts = convo.initialContext.opPostMediaParts.map(part => {
+              if (part.inlineData && typeof part.inlineData.data === 'string') {
+                  return {
+                      inlineData: {
+                          mimeType: part.inlineData.mimeType,
+                          data: `[OP Media data omitted for localStorage: ${part.inlineData.mimeType}, original data length: ${part.inlineData.data.length}]`
+                      }
+                  };
+              }
+              return part;
+            });
+            storableInitialContext = { ...convo.initialContext, opPostMediaParts: storableOpMediaParts };
+        }
+        return [key, { ...convo, history: storableHistory, initialContext: storableInitialContext }];
+      });
+      localStorage.setItem(GEMINI_DVACH_CONVERSATIONS_KEY, JSON.stringify(storableConversations));
+    } catch (error) {
+      if (error instanceof DOMException && (error.name === 'QuotaExceededError' || error.code === 22)) {
+        addLog('LocalStorage quota exceeded while saving bot conversations. Attempting to clear bot conversations to recover.', 'error', error);
+        try {
+          localStorage.removeItem(GEMINI_DVACH_CONVERSATIONS_KEY);
+          setGeminiDvachConversations(new Map()); // Clear in-memory state as well
+          addLog('Cleared bot conversations from localStorage and memory due to quota error. App should function, but bot context is lost.', 'warning');
+        } catch (clearError) {
+          addLog('Failed to clear bot conversations from localStorage after quota error. Manual clearing of localStorage might be needed.', 'error', clearError);
+        }
+      } else {
+        addLog('Error saving bot conversations to localStorage: ' + (error as Error).message, 'error', error);
+      }
+    }
+  }, [geminiDvachConversations, addLog, setGeminiDvachConversations]);
+
 
   useEffect(() => {
     if (dvachSessionCookies) {
