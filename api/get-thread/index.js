@@ -1,4 +1,3 @@
-
 // api/get-thread/index.js
 import fetch from 'node-fetch';
 
@@ -38,13 +37,11 @@ export default async function handler(req, res) {
     const dvachResponse = await fetch(dvachUrl, {
       headers: {
         'User-Agent': clientUserAgent, 
-        'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
         'Referer': `${DVACH_BASE_URL}/${board}/`,
         'Origin': DVACH_BASE_URL,
-        'Sec-Fetch-Site': 'same-origin',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Dest': 'empty',
+        // Sec-Fetch-* headers removed for simplicity
       }
     });
 

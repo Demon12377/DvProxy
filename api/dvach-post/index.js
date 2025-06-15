@@ -1,4 +1,3 @@
-
 // api/dvach-post/index.js
 import formidable from 'formidable';
 import fs from 'fs';
@@ -115,14 +114,12 @@ export default async function handler(req, res) {
     const dvachPostRequestHeaders = {
       ...dvachPostFormData.getHeaders(), 
       'Cookie': cookieHeader, 
-      'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept': 'application/json, text/plain, */*',
       'User-Agent': clientUserAgent,
       'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
       'Referer': `${DVACH_BASE_URL}/${board}/`,
       'Origin': DVACH_BASE_URL,
-      'Sec-Fetch-Site': 'same-origin',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Dest': 'empty',
+      // Sec-Fetch-* headers removed for simplicity
     };
     
     console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach: ${dvachPostUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);

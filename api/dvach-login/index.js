@@ -1,4 +1,3 @@
-
 // api/dvach-login/index.js
 import fetch from 'node-fetch';
 import FormDataNode from 'form-data'; // Using FormData for Node.js environment
@@ -70,13 +69,11 @@ export default async function handler(req, res) {
     const dvachRequestHeaders = {
       ...loginFormData.getHeaders(), 
       'User-Agent': clientUserAgent,
-      'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
       'Referer': `${DVACH_BASE_URL}/`,
       'Origin': DVACH_BASE_URL,
-      'Sec-Fetch-Site': 'same-origin',
-      'Sec-Fetch-Mode': 'cors', // 'navigate' could also be an option for login, but 'cors' is generally safer for API-like interaction
-      'Sec-Fetch-Dest': 'empty', // 'document' for login page navigation, 'empty' for fetch/XHR
+      // Sec-Fetch-* headers removed for simplicity
     };
 
     try {
