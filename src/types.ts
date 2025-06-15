@@ -1,6 +1,6 @@
 
 /// <reference types="vite/client" />
-import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason } from "@google/genai";
+import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as ActualGenerateContentResponse, FinishReason as SDKFinishReason } from "@google/genai";
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -81,7 +81,7 @@ export interface DvachThreadResponse {
 }
 
 // For API responses from /api/dvach-post and /api/dvach-login
-export interface DvachPostApiResponse { 
+export interface DvachPostApiResponse {
   result: number; // 0 for error, 1 for success (can also be 2 for passcode already active)
   reason?: string; // Error message from Dvach (makaba.md style)
   Error?: string; // Alternative error message (makaba.md style, less common now)
@@ -119,36 +119,36 @@ export interface SentMessageInfo {
   parent?: string; // Post number this message replied to, if any
   file_info?: { name: string; size: number; hash?: string }; // Info about attached file
   isGeminiPost?: boolean;
-  geminiTriggerPostNum?: string; 
-  geminiGeneratedImage?: boolean; 
-  geminiConversationId?: string; 
-  isBotSeedPost?: boolean; 
+  geminiTriggerPostNum?: string;
+  geminiGeneratedImage?: boolean;
+  geminiConversationId?: string;
+  isBotSeedPost?: boolean;
 }
 
 export type ProxyModeForGET =
-  | 'vercel_serverless' 
+  | 'vercel_serverless'
   | 'custom_go_x2u'
   | 'custom_cors_anywhere'
-  | 'custom_codetabs' 
+  | 'custom_codetabs'
   | 'custom_general_prefix'
   | 'custom_general_param'
   | 'none';
 
 export interface DvachSessionCookies {
   passcode_auth: string | null;
-  usercode: string | null; 
+  usercode: string | null;
 }
 
-export type AutonomousBotReplyMode = 
-  | 'replies_to_bot' 
+export type AutonomousBotReplyMode =
+  | 'replies_to_bot'
   | 'random_in_thread';
 
-export type AutonomousBotInitialContextScope = 
+export type AutonomousBotInitialContextScope =
   | 'op_only'
   | 'full_thread';
 
 // Using string literals for HarmCategory and HarmBlockThreshold as enums might not be available in ESM build
-export type HarmCategoryStrings = 
+export type HarmCategoryStrings =
   | "HARM_CATEGORY_UNSPECIFIED"
   | "HARM_CATEGORY_HARASSMENT"
   | "HARM_CATEGORY_HATE_SPEECH"
@@ -169,10 +169,10 @@ export interface SafetySettingRule {
 
 export interface AppSettings {
   // Global Dvach Settings (used by Manual Ops tab inputs primarily)
-  board: string; 
-  threadId: string; 
-  
-  purchasedPasscode: string; 
+  board: string;
+  threadId: string;
+
+  purchasedPasscode: string;
 
   geminiApiKeySource: 'env' | 'user';
   userGeminiApiKey: string;
@@ -181,59 +181,58 @@ export interface AppSettings {
 
   // Proxy settings (primarily client-side for GETs not covered by serverless)
   proxyModeForGET: ProxyModeForGET; // For thread data, if not 'vercel_serverless'
-  customProxyUrlForGET: string;    
-  
+  customProxyUrlForGET: string;
+
   proxyModeForImagesGET: ProxyModeForGET; // Specifically for fetching images/media by client
-  customProxyUrlForImagesGET: string;   
-  
-  userAgent: string; 
+  customProxyUrlForImagesGET: string;
+
+  userAgent: string;
 
   // Manual Gemini Reply settings (for Manual Ops tab)
-  geminiAnalyzeOpMedia: boolean; 
-  geminiAnalyzeAnonMedia: boolean; 
-  
+  geminiAnalyzeOpMedia: boolean;
+  geminiAnalyzeAnonMedia: boolean;
+
   // Global Gemini interaction settings (applies to both Manual and Bot where relevant)
-  geminiReplyWithGeneratedImage: boolean; 
-  maxImagesToAnalyzePerPost: number; 
+  geminiReplyWithGeneratedImage: boolean;
+  maxImagesToAnalyzePerPost: number;
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
-  geminiSafetySettings: SafetySettingRule[]; // New for safety settings
+  geminiSafetySettings: SafetySettingRule[];
 
   // Autonomous Bot specific settings
-  autonomousBotTargetBoard: string; 
-  autonomousBotTargetThreadId: string; 
-  autonomousBotSystemPrompt: string; 
-  botAnalyzesImagesInTriggerPosts: boolean; 
+  autonomousBotTargetBoard: string;
+  autonomousBotTargetThreadId: string;
+  autonomousBotSystemPrompt: string;
+  botAnalyzesImagesInTriggerPosts: boolean;
   autonomousBotReplyMode: AutonomousBotReplyMode;
-  autonomousBotCycleIntervalSeconds: number; 
-  autonomousBotAllowReplyToSelf: boolean; 
+  autonomousBotCycleIntervalSeconds: number;
+  autonomousBotAllowReplyToSelf: boolean;
   autonomousBotInitialContextScope: AutonomousBotInitialContextScope;
-  autonomousBotFullThreadContextMaxChars: number; 
-  autonomousBotMinReplyDelayMs: number; 
-  autonomousBotMaxReplyDelayMs: number; 
-  autonomousBotDisableThinking: boolean; 
+  autonomousBotFullThreadContextMaxChars: number;
+  autonomousBotMinReplyDelayMs: number;
+  autonomousBotMaxReplyDelayMs: number;
+  autonomousBotDisableThinking: boolean;
 
-  // Gemini Model Configuration (mainly for manual replies; bot might use simplified or system prompt dictates style)
-  geminiSystemInstruction: string; // For manual replies primarily & Gemini Lab Chat
+  // Gemini Model Configuration (for Manual Gemini Replies to Dvach posts)
+  geminiSystemInstruction: string; // System instruction for Manual Gemini Replies
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
   geminiMaxOutputTokens: number;
-  geminiResponseMimeType: 'text/plain' | 'application/json'; 
-  useSearchGrounding: boolean; // For manual testing, bot usually won't use this.
-  useThinkingBudget: boolean; 
-  geminiThinkingBudget: number;
+  geminiResponseMimeType: 'text/plain' | 'application/json'; // For manual replies; bot forces JSON.
+  useThinkingBudget: boolean; // For manual replies
+  geminiThinkingBudget: number; // For manual replies
 
 
   // Repetitive Posting Mode (Advanced/Botting Feature) - Kept from original, might be unused
   enableRepetitivePostingMode: boolean;
   repetitivePostMessage: string;
-  repetitivePostCount: number; 
-  repetitivePostDelay: number; 
+  repetitivePostCount: number;
+  repetitivePostDelay: number;
 
   // Pre-filled Posting Mode (Advanced/Botting Feature) - Kept from original, might be unused
   enablePrefilledPostingMode: boolean;
-  prefilledPostMessages: string; 
-  prefilledPostTargets: string; 
+  prefilledPostMessages: string;
+  prefilledPostTargets: string;
 }
 
 export interface LogEntry {
@@ -241,58 +240,50 @@ export interface LogEntry {
   timestamp: number;
   message: string;
   type: 'info' | 'error' | 'success' | 'warning' | 'gemini' | 'dvach' | 'system' | 'auth' | 'bot_activity' | 'bot_error' | 'bot_setup' | 'bot_warning';
-  data?: unknown; 
+  data?: unknown;
 }
 
-export enum GeminiFeature {
-  GENERATE_CONTENT = "generateContent",
-  GENERATE_CONTENT_STREAM = "generateContentStream", // For standalone streaming
-  CHAT = "chat", // For streaming chat
-  IMAGE_GENERATION = "imageGeneration",
-}
-
-
-export interface ChatMessage { 
-  id: string; 
-  role: 'user' | 'model' | 'system'; 
-  parts: Part[]; 
+export interface ChatMessage { // Primarily for Bot's internal conversation history
+  id: string;
+  role: 'user' | 'model' | 'system';
+  parts: Part[];
   timestamp: number;
-  imagePreview?: string; 
-  isLoading?: boolean; 
-  isStreaming?: boolean; // To indicate this message is currently being streamed
+  imagePreview?: string; // Optional: If we want to show images related to this message in some debug UI
+  isLoading?: boolean; // Not typically used for stored history
+  isStreaming?: boolean; // Not typically used for stored history
 }
 
 export type GeminiChatInstance = GeminiChatInstanceTypeSDK; // Use SDK type
 
-export interface GeneratedImage { 
-  base64Data: string; 
-  mimeType: string;   
-  prompt?: string;     
+export interface GeneratedImage { // For image generation via manual replies
+  base64Data: string;
+  mimeType: string;
+  prompt?: string;
 }
 
 export interface GeminiDvachConversation {
   id: string; // e.g., "board_threadId"
   board: string;
   threadId: string;
-  triggerPostNum: string; // The post num that initiated this specific interaction or seed. For bot context, could be OP.
-  botSystemPromptUsed: string; // The system prompt active when this conversation context was primarily built or last acted upon by bot.
-  geminiChatInstance?: GeminiChatInstance; // Stored initialized chat for conversational mode (currently not fully utilized by bot, history is primary)
-  history: ChatMessage[]; // Full history including initial system prompt, user posts (formatted), and bot model replies.
-  lastCheckedTimestamp: number; // When this thread was last processed by the bot.
-  lastBotReplyNum?: string; // The Dvach post number of the bot's last reply in this context.
-  participatingPostNumbers: string[]; // Set of Dvach post numbers that are part of this conversation (user posts, bot replies).
-  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded' | 'context_built'; 
-  initialContext?: { // Context built when conversation was initiated or reset for the thread
+  triggerPostNum: string;
+  botSystemPromptUsed: string;
+  // geminiChatInstance removed as bot directly uses history with generateContent
+  history: ChatMessage[];
+  lastCheckedTimestamp: number;
+  lastBotReplyNum?: string;
+  participatingPostNumbers: string[];
+  status: 'active' | 'dormant' | 'ended_by_bot' | 'error' | 'archived' | 'bot_seeded' | 'context_built';
+  initialContext?: {
     opPostNum?: string;
-    opPostText?: string; // If scope is 'op_only', this is OP text. If 'full_thread', this is the full summary.
-    opPostImagePreviews?: string[]; 
-    opPostMediaParts?: Part[]; // Cached media parts from OP post (always OP, regardless of scope)
-    precedingPostsText?: string[]; // Text of posts right before the trigger (if applicable, less used with new context logic)
-    targetPostText?: string; // Text of the triggerPostNum itself (if not OP)
-    targetPostImagePreviews?: string[]; 
+    opPostText?: string;
+    opPostImagePreviews?: string[];
+    opPostMediaParts?: Part[];
+    precedingPostsText?: string[];
+    targetPostText?: string;
+    targetPostImagePreviews?: string[];
   };
-  isBotSeedConversation?: boolean; // True if this conversation was seeded by the bot itself (e.g. initial post in a thread)
-  initialBotPostNum?: string; // If isBotSeedConversation, the Dvach post num of the bot's seed post.
+  isBotSeedConversation?: boolean;
+  initialBotPostNum?: string;
 }
 
 // Types related to Gemini Grounding (for CustomGenerateContentResponse)
@@ -309,7 +300,7 @@ export interface GroundingChunk {
 
 export interface GroundingMetadata {
   webSearchQueries?: string[];
-  groundingAttribution?: { 
+  groundingAttribution?: {
      sourceId: string;
      content: {
        text: string;
@@ -319,10 +310,11 @@ export interface GroundingMetadata {
   }[];
 }
 
-type SDKCandidate = NonNullable<GeminiGenerateContentResponseSDK['candidates']>[0];
+type SDKCandidate = NonNullable<ActualGenerateContentResponse['candidates']>[0];
+type ActualFinishReason = SDKFinishReason; // Keep SDK's FinishReason
 
-export interface CustomGenerateContentResponse extends GeminiGenerateContentResponseSDK {
-  candidates?: (SDKCandidate & { groundingMetadata?: GroundingMetadata; finishReason?: FinishReason | string })[];
+export interface CustomGenerateContentResponse extends ActualGenerateContentResponse {
+  candidates?: (SDKCandidate & { groundingMetadata?: GroundingMetadata; finishReason?: ActualFinishReason | string })[];
 }
 
 // Cache for OP media to avoid refetching/reprocessing constantly for the bot
