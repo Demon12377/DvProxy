@@ -1,4 +1,3 @@
-
 // constants.ts - Store widely used, unchanging values for the application.
 import { AppSettings, SafetySettingRule } from './types'; // Correct import path
 

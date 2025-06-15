@@ -6,12 +6,33 @@ import FormDataNode from 'form-data';
 
 export const config = {
   api: {
-    bodyParser: false, // Required for formidable to correctly parse multipart/form-data
+    bodyParser: false, 
   },
 };
 
 const DEFAULT_DVACH_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DVACH_BASE_URL = 'https://2ch.hk';
+
+// Environment variables for server-side outbound proxy
+const OUTBOUND_PROXY_URL = process.env.DVACH_OUTBOUND_PROXY_URL;
+const OUTBOUND_PROXY_TYPE = process.env.DVACH_OUTBOUND_PROXY_TYPE; // e.g., 'general_param', 'prefix'
+
+function buildProxiedUrlForServerless(targetDvachUrl) {
+  if (!OUTBOUND_PROXY_URL) {
+    return targetDvachUrl; 
+  }
+  if (OUTBOUND_PROXY_TYPE === 'general_param') {
+    return `${OUTBOUND_PROXY_URL}${encodeURIComponent(targetDvachUrl)}`;
+  }
+  if (OUTBOUND_PROXY_TYPE === 'prefix') {
+    const proxyBase = OUTBOUND_PROXY_URL.endsWith('/') ? OUTBOUND_PROXY_URL : `${OUTBOUND_PROXY_URL}/`;
+    return `${proxyBase}${targetDvachUrl}`;
+  }
+  console.warn(`[api/dvach-post] DVACH_OUTBOUND_PROXY_URL is set, but DVACH_OUTBOUND_PROXY_TYPE ('${OUTBOUND_PROXY_TYPE}') is unrecognized. Attempting direct connection or simple prefix proxy.`);
+  const proxyBase = OUTBOUND_PROXY_URL.endsWith('/') ? OUTBOUND_PROXY_URL : `${OUTBOUND_PROXY_URL}/`;
+  return `${proxyBase}${targetDvachUrl}`;
+}
+
 
 export default async function handler(req, res) {
   const timestamp = new Date().toISOString();
@@ -104,7 +125,10 @@ export default async function handler(req, res) {
       console.log(`${timestamp} [api/dvach-post] Actual file attached to Dvach request: ${actualFile.originalFilename}`);
     }
 
-    const dvachPostUrl = `${DVACH_BASE_URL}/user/posting?nc=1`;
+    const targetDvachPostUrl = `${DVACH_BASE_URL}/user/posting?nc=1`;
+    const finalPostFetchUrl = buildProxiedUrlForServerless(targetDvachPostUrl);
+    console.log(`${timestamp} [api/dvach-post] Fetching. Final URL: ${finalPostFetchUrl}, Target Dvach: ${targetDvachPostUrl}, Outbound Proxy Used: ${OUTBOUND_PROXY_URL ? 'Yes ('+OUTBOUND_PROXY_TYPE+')' : 'No'}`);
+
     
     let cookieHeader = `passcode_auth=${passcodeAuthCookieValue}`;
     if (userCodeCookieValue) {
@@ -119,25 +143,24 @@ export default async function handler(req, res) {
       'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
       'Referer': `${DVACH_BASE_URL}/${board}/`,
       'Origin': DVACH_BASE_URL,
-      // Sec-Fetch-* headers removed for simplicity
     };
     
-    console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach: ${dvachPostUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);
+    console.log(`${timestamp} [api/dvach-post] Sending POST to Dvach/Proxy: ${finalPostFetchUrl}. Headers: Cookie set, UA: ${clientUserAgent}`);
 
     let dvachPostResponse;
     try {
-        dvachPostResponse = await fetch(dvachPostUrl, {
+        dvachPostResponse = await fetch(finalPostFetchUrl, {
           method: 'POST',
           body: dvachPostFormData,
           headers: dvachPostRequestHeaders,
         });
     } catch (fetchPostError) {
-        console.error(`${timestamp} [api/dvach-post] Network error calling Dvach /user/posting:`, fetchPostError);
-        return res.status(502).json({ result:0, error: { code: -2003, message: `Failed to connect to Dvach for posting: ${fetchPostError.message}` }});
+        console.error(`${timestamp} [api/dvach-post] Network error calling Dvach/Proxy /user/posting:`, fetchPostError);
+        return res.status(502).json({ result:0, error: { code: -2003, message: `Failed to connect to Dvach/Proxy for posting: ${fetchPostError.message}` }});
     }
 
     const dvachPostResponseText = await dvachPostResponse.text();
-    console.log(`${timestamp} [api/dvach-post] Dvach /user/posting response status: ${dvachPostResponse.status}, body preview: ${dvachPostResponseText.substring(0,300)}`);
+    console.log(`${timestamp} [api/dvach-post] Dvach/Proxy /user/posting response status: ${dvachPostResponse.status}, body preview: ${dvachPostResponseText.substring(0,300)}`);
 
     res.setHeader('Content-Type', 'application/json'); 
     
@@ -145,13 +168,11 @@ export default async function handler(req, res) {
     try {
       dvachPostJson = JSON.parse(dvachPostResponseText);
     } catch (e) {
-      console.warn(`${timestamp} [api/dvach-post] Dvach /user/posting response not valid JSON. Status: ${dvachPostResponse.status}. Text: ${dvachPostResponseText.substring(0,200)}`);
+      console.warn(`${timestamp} [api/dvach-post] Dvach/Proxy /user/posting response not valid JSON. Status: ${dvachPostResponse.status}. Text: ${dvachPostResponseText.substring(0,200)}`);
       if (!dvachPostResponse.ok) {
-        return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach (non-JSON), status ${dvachPostResponse.status}` } });
+        return res.status(dvachPostResponse.status).json({ result: 0, error: { code: dvachPostResponse.status, message: dvachPostResponseText.substring(0,200) || `Unknown error from Dvach/Proxy (non-JSON), status ${dvachPostResponse.status}` } });
       }
-      // If response is OK but not JSON, it might be a redirect or an unexpected success page.
-      // It's safer to assume success if status is OK and let the client figure out the post number if missing.
-      return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach, but response was not valid JSON. Check Dvach manually for post.", rawResponsePreview: dvachPostResponseText.substring(0,200), num: Date.now().toString() });
+      return res.status(200).json({ result: 1, message: "Post attempt got OK status from Dvach/Proxy, but response was not valid JSON. Check Dvach manually for post.", rawResponsePreview: dvachPostResponseText.substring(0,200), num: Date.now().toString() });
     }
 
     return res.status(dvachPostResponse.status).json(dvachPostJson);

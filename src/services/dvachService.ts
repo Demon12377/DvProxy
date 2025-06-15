@@ -1,21 +1,18 @@
 
 import { DvachThreadResponse, DvachPostApiResponse, DvachApiError, ProxyModeForGET, DvachSessionCookies, DvachPost } from '../types';
-import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT, PROXY_URL_CODETABS_BASE } from '../constants'; // Removed DVACH_DOMAINS
+import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT, PROXY_URL_CODETABS_BASE } from '../constants'; 
 
 interface CachedThread {
   data: DvachThreadResponse;
   timestamp: number;
 }
 
-// Consolidate proxy URL building logic here, usable by App.tsx as well if needed.
-// This version is more aligned with what was in App.tsx previously for diverse proxy types.
 export function buildProxiedGetUrl(
   targetUrl: string,
   proxyMode: ProxyModeForGET,
   customProxyUrl?: string 
 ): string {
   if (!targetUrl.startsWith('http')) { 
-    // Allow relative paths for internal API calls, e.g. /api/get-thread
     if (!targetUrl.startsWith('/api/')) { 
         console.warn(`[dvachService/buildProxiedGetUrl] targetUrl '${targetUrl}' is not a full HTTP/S URL nor an /api/ path. Returning as is.`);
     }
@@ -30,8 +27,7 @@ export function buildProxiedGetUrl(
           ? (customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY) 
           : `${(customProxyUrl || DEFAULT_CORS_ANYWHERE_PROXY)}/`;
       return `${corsBase}${targetUrl}`;
-    case 'custom_codetabs': // Primarily for images
-      // CodeTabs expects the URL without http(s):// prefix for its quest param
+    case 'custom_codetabs': 
       return `${customProxyUrl || PROXY_URL_CODETABS_BASE}${encodeURIComponent(targetUrl.replace(/^https?:\/\//, ''))}`;
     case 'custom_general_prefix':
       if (!customProxyUrl) return targetUrl;
@@ -45,7 +41,7 @@ export function buildProxiedGetUrl(
       return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
     case 'vercel_serverless': 
          console.warn(`[dvachService/buildProxiedGetUrl] 'vercel_serverless' proxy mode used for client-side construction with external URL '${targetUrl}'. This is typically handled by direct /api/* calls. Verify configuration if this was unintended. Using direct fetch for this URL if it's external.`);
-         return targetUrl; // This function is for client-side URL construction. If it's an external URL, this mode shouldn't apply here.
+         return targetUrl; 
     case 'none':
     default:
       return targetUrl;
@@ -53,7 +49,7 @@ export function buildProxiedGetUrl(
 }
 
 export async function getThreadData(
-  baseDvachDomain: string, // New parameter
+  baseDvachDomain: string, 
   board: string, 
   threadId: string,
   proxyModeForGET: ProxyModeForGET, 
@@ -90,14 +86,13 @@ export async function getThreadData(
   const requestHeaders: HeadersInit = { 'Accept': 'application/json' };
 
   if (proxyModeForGET === 'vercel_serverless') {
-    // Note: /api/get-thread internally targets 2ch.hk, this client-setting doesn't change that serverless function's target.
     fetchUrl = `/api/get-thread?board=${encodeURIComponent(board)}&thread=${encodeURIComponent(threadId)}`;
-    requestHeaders['X-User-Agent'] = userAgent; // Pass User-Agent to our serverless function
+    requestHeaders['X-User-Agent'] = userAgent; 
     console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.hk, UA: ${userAgent})`);
   } else {
     targetDvachUrl = `${baseDvachDomain}/${board}/res/${threadId}.json`; 
     fetchUrl = buildProxiedGetUrl(targetDvachUrl, proxyModeForGET, customProxyUrlForGET);
-    requestHeaders['User-Agent'] = userAgent; // User-Agent for direct/external proxy calls
+    requestHeaders['User-Agent'] = userAgent; 
     console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetDvachUrl}, UA: ${userAgent})`);
   }
   
@@ -147,7 +142,6 @@ export async function loginToDvach(
   purchasedPasscode: string,
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachSessionCookies> {
-  // This function uses /api/dvach-login, which internally targets 2ch.hk
   console.info(`[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login (targets 2ch.hk, UA: ${userAgent})...`);
   
   let response;
@@ -156,7 +150,7 @@ export async function loginToDvach(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json', 
-        'X-User-Agent': userAgent, // This is correctly passed to the serverless function
+        'X-User-Agent': userAgent, 
       },
       body: JSON.stringify({ purchased_passcode: purchasedPasscode }),
     });
@@ -199,7 +193,6 @@ export async function postWithSessionCookie(
   if (!sessionCookies.passcode_auth) {
     throw new Error("passcode_auth session cookie is missing. Cannot post. Please login.");
   }
-  // This function uses /api/dvach-post, which internally targets 2ch.hk
   console.info(`[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post (targets 2ch.hk, UA: ${userAgent}). Params:`, { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
   
   const formData = new FormData();
@@ -226,7 +219,7 @@ export async function postWithSessionCookie(
     response = await fetch('/api/dvach-post', {
       method: 'POST',
       headers: {
-        'X-User-Agent': userAgent, // This is correctly passed to the serverless function
+        'X-User-Agent': userAgent, 
       },
       body: formData, 
     });
@@ -240,11 +233,10 @@ export async function postWithSessionCookie(
 
   try {
     responseBodyText = await response.text();
-    if (!responseBodyText && !response.ok) { // Allow empty body on OK for some reason, though not expected
+    if (!responseBodyText && !response.ok) { 
         const errorDetail = `Status: ${response.status} ${response.statusText}. Response body was empty from /api/dvach-post.`;
         throw new Error(`Serverless function /api/dvach-post error: ${errorDetail}`);
     } else if (!responseBodyText && response.ok) {
-        // This case indicates an issue with the serverless function itself if it returns 200 OK with empty body.
         console.warn(`[dvachService/postWithSessionCookie] Serverless function /api/dvach-post returned OK but with an empty response body. Assuming potential success if no other error.`)
         return { result: 1, message: "Serverless post function returned OK with empty body. Check Dvach manually for post.", num: Date.now().toString() };
     }
@@ -290,7 +282,6 @@ export function extractDvachApiError(error: any): DvachApiError | null {
 
   let messageToParse = error.message || (typeof error === 'string' ? error : null);
   
-  // If error object itself has Dvach's structure
   if (error.result === 0 && (error.reason || error.Error)) {
     return { code: -1, message: error.reason || error.Error };
   }
@@ -299,7 +290,7 @@ export function extractDvachApiError(error: any): DvachApiError | null {
   }
 
   if (messageToParse) {
-    try { // Attempt to parse if error.message is a JSON string from serverless function
+    try { 
       const parsedOuterError = JSON.parse(messageToParse);
       if (parsedOuterError.result === 0 && (parsedOuterError.reason || parsedOuterError.Error)) {
         return { code: -1, message: parsedOuterError.reason || parsedOuterError.Error };
@@ -309,13 +300,12 @@ export function extractDvachApiError(error: any): DvachApiError | null {
       }
     } catch (e) { /* Not a JSON string encapsulating another error */ }
 
-    // Regex for specific Dvach error patterns in a plain string message
     const matchCode = messageToParse.match(/Error code (-?\d+)|Dvach API Error \((-?\d+)\)|error code: (-?\d+)|Banned: (-?\d+)|Ban: (-?\d+)|error: (-?\d+)/i);
     const code = matchCode ? parseInt(matchCode[1] || matchCode[2] || matchCode[3] || matchCode[4] || matchCode[5] || matchCode[6], 10) : -999; // Default unknown error code
     return { code: code, message: messageToParse };
   }
   
-  return null; // Could not extract specific Dvach error structure
+  return null; 
 }
 
 
