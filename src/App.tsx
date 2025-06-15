@@ -1,4 +1,3 @@
-
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleGenAI, Part, Type } from "@google/genai"; 
@@ -1585,21 +1584,30 @@ useEffect(() => {
       </div>
       <div className="max-h-[600px] overflow-y-auto bg-gray-50 dark:bg-gray-900 p-3 rounded custom-scrollbar border border-gray-200 dark:border-gray-700">
         {logs.length === 0 && <p className="text-center text-gray-500 dark:text-gray-400">No logs yet.</p>}
-        {logs.map(log => (
-          <div key={log.id} className={`text-xs p-1.5 mb-1 rounded border-l-4 ${
-            log.type === 'error' || log.type === 'bot_error' ? 'bg-red-50 dark:bg-red-900/50 border-red-500 text-red-700 dark:text-red-200' : 
-            log.type === 'success' ? 'bg-green-50 dark:bg-green-900/50 border-green-500 text-green-700 dark:text-green-200' :
-            log.type === 'warning' || log.type === 'bot_warning' ? 'bg-yellow-50 dark:bg-yellow-900/50 border-yellow-500 text-yellow-700 dark:text-yellow-200' :
-            log.type === 'gemini' ? 'bg-purple-50 dark:bg-purple-900/50 border-purple-500 text-purple-700 dark:text-purple-200' :
-            log.type === 'dvach' ? 'bg-blue-50 dark:bg-blue-900/50 border-blue-500 text-blue-700 dark:text-blue-200' :
-            log.type === 'auth' ? 'bg-cyan-50 dark:bg-cyan-900/50 border-cyan-500 text-cyan-700 dark:text-cyan-200' :
-            log.type === 'bot_activity' || log.type === 'bot_setup' ? 'bg-indigo-50 dark:bg-indigo-900/50 border-indigo-500 text-indigo-700 dark:text-indigo-200' :
-            'bg-gray-100 dark:bg-gray-700/50 border-gray-500 text-gray-700 dark:text-gray-300' 
-          }`}>
-            <span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
-            {log.data && <pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-600 p-1 rounded overflow-x-auto">{formatLogDataForDisplay(log.data) as string}</pre>}
-          </div>
-        ))}
+        {logs.map(log => {
+          const dataDisplay: string | null = (log.data !== undefined && log.data !== null) 
+            ? formatLogDataForDisplay(log.data) 
+            : null;
+          return (
+            <div key={log.id} className={`text-xs p-1.5 mb-1 rounded border-l-4 ${
+              log.type === 'error' || log.type === 'bot_error' ? 'bg-red-50 dark:bg-red-900/50 border-red-500 text-red-700 dark:text-red-200' : 
+              log.type === 'success' ? 'bg-green-50 dark:bg-green-900/50 border-green-500 text-green-700 dark:text-green-200' :
+              log.type === 'warning' || log.type === 'bot_warning' ? 'bg-yellow-50 dark:bg-yellow-900/50 border-yellow-500 text-yellow-700 dark:text-yellow-200' :
+              log.type === 'gemini' ? 'bg-purple-50 dark:bg-purple-900/50 border-purple-500 text-purple-700 dark:text-purple-200' :
+              log.type === 'dvach' ? 'bg-blue-50 dark:bg-blue-900/50 border-blue-500 text-blue-700 dark:text-blue-200' :
+              log.type === 'auth' ? 'bg-cyan-50 dark:bg-cyan-900/50 border-cyan-500 text-cyan-700 dark:text-cyan-200' :
+              log.type === 'bot_activity' || log.type === 'bot_setup' ? 'bg-indigo-50 dark:bg-indigo-900/50 border-indigo-500 text-indigo-700 dark:text-indigo-200' :
+              'bg-gray-100 dark:bg-gray-700/50 border-gray-500 text-gray-700 dark:text-gray-300' 
+            }`}>
+              <span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}
+              {dataDisplay && (
+                <pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-600 p-1 rounded overflow-x-auto">
+                  {dataDisplay}
+                </pre>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

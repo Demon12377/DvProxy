@@ -1,4 +1,3 @@
-
 /// <reference types="vite/client" />
 import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason } from "@google/genai";
 
