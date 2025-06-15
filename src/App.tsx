@@ -1,11 +1,12 @@
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GoogleGenAI, Part, Type } from "@google/genai"; 
+import { GoogleGenAI, Part, Type, GenerateContentParameters, GenerateContentResponse as GeminiGenerateContentResponseSDK } from "@google/genai"; 
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse, 
   DvachFile, GeminiDvachConversation, ChatMessage, 
-  DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope
+  DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
+  SafetySettingRule // Added SafetySettingRule
 } from './types'; 
 import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import { 
@@ -14,7 +15,7 @@ import {
   GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   DVACH_DOMAINS, DEFAULT_USER_AGENT,
   DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST, PROXY_URL_CODETABS_BASE, BUMP_KEYWORDS,
-  AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS
+  AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS, DEFAULT_GEMINI_SAFETY_SETTINGS // Added DEFAULT_GEMINI_SAFETY_SETTINGS
 } from './constants';
 import { generateUserAgent } from './utils/userAgentGenerator'; 
 
@@ -27,7 +28,6 @@ import {
 
 // Ensure VITE_GEMINI_API_KEY is read correctly from import.meta.env
 const processEnvApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-// Minor comment to try and force cache refresh on Vercel - 2024-07-29_v3 (another attempt)
 
 interface BotReplySchema {
   replyText: string; 
@@ -57,6 +57,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiReplyWithGeneratedImage: false, 
   maxImagesToAnalyzePerPost: DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST,
   analyzeVideosInTriggerPosts: false, 
+  geminiSafetySettings: DEFAULT_GEMINI_SAFETY_SETTINGS, // New
   
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
@@ -67,6 +68,10 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   autonomousBotAllowReplyToSelf: false,
   autonomousBotInitialContextScope: 'op_only',
   autonomousBotFullThreadContextMaxChars: 5000, 
+  autonomousBotMinReplyDelayMs: 2000, // New
+  autonomousBotMaxReplyDelayMs: 7000, // New
+  autonomousBotDisableThinking: false, // New
+
 
   geminiSystemInstruction: "You are a witty and insightful anonymous user on an imageboard. Your replies should be relevant, concise, and in the typical style of the board. If quoting, use '>>POST_NUMBER\\n'. No meta-comments.", 
   geminiTemperature: 0.8,
@@ -205,6 +210,10 @@ const App: React.FC = () => {
         useSearchGrounding: initialSettings.useSearchGrounding === undefined ? DEFAULT_APP_SETTINGS.useSearchGrounding : !!initialSettings.useSearchGrounding,
         useThinkingBudget: initialSettings.useThinkingBudget === undefined ? DEFAULT_APP_SETTINGS.useThinkingBudget : !!initialSettings.useThinkingBudget,
         userAgent: initialSettings.userAgent || generateUserAgent(),
+        geminiSafetySettings: initialSettings.geminiSafetySettings || DEFAULT_GEMINI_SAFETY_SETTINGS, // New
+        autonomousBotMinReplyDelayMs: initialSettings.autonomousBotMinReplyDelayMs === undefined ? DEFAULT_APP_SETTINGS.autonomousBotMinReplyDelayMs : Number(initialSettings.autonomousBotMinReplyDelayMs), // New
+        autonomousBotMaxReplyDelayMs: initialSettings.autonomousBotMaxReplyDelayMs === undefined ? DEFAULT_APP_SETTINGS.autonomousBotMaxReplyDelayMs : Number(initialSettings.autonomousBotMaxReplyDelayMs), // New
+        autonomousBotDisableThinking: initialSettings.autonomousBotDisableThinking === undefined ? DEFAULT_APP_SETTINGS.autonomousBotDisableThinking : !!initialSettings.autonomousBotDisableThinking, // New
     };
     if (processEnvApiKey && mergedSettings.geminiApiKeySource === 'env' && !initialSettings.userGeminiApiKey) {
     } else if (!processEnvApiKey && mergedSettings.geminiApiKeySource === 'env') {
@@ -620,19 +629,30 @@ const App: React.FC = () => {
     
     let geminiReplyText = "";
     try {
+      const requestConfig: GenerateContentParameters['config'] = {
+        systemInstruction: systemInstructionForReply,
+        temperature: settings.geminiTemperature, topP: settings.geminiTopP, 
+        topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
+        responseMimeType: settings.geminiResponseMimeType,
+        safetySettings: settings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})), // Cast as any if enums are not directly usable
+      };
+      if (settings.useThinkingBudget) {
+        requestConfig.thinkingConfig = { thinkingBudget: settings.geminiThinkingBudget };
+      }
+      
       const response = await ai.models.generateContent({
         model: GEMINI_TEXT_MODEL,
         contents: [{ role: 'user', parts: geminiMessageParts }],
-        config: { 
-          systemInstruction: systemInstructionForReply,
-          temperature: settings.geminiTemperature, topP: settings.geminiTopP, 
-          topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
-          responseMimeType: settings.geminiResponseMimeType, 
-          thinkingConfig: settings.useThinkingBudget ? { thinkingBudget: settings.geminiThinkingBudget } : undefined
-        }
+        config: requestConfig
       });
       const rawGeminiText = response.text || "";
-      geminiReplyText = `>>${targetPost.num}\n${rawGeminiText.trim()}`; 
+
+      const quotePattern = new RegExp(`^>>${targetPost.num}\\s*\\n?`);
+      if (quotePattern.test(rawGeminiText.trimStart())) {
+          geminiReplyText = rawGeminiText.trim(); 
+      } else {
+          geminiReplyText = `>>${targetPost.num}\n${rawGeminiText.trim()}`; 
+      }
       
       addLog(`Gemini generated text for manual reply to >>${targetPost.num}: ${geminiReplyText.substring(0, 100)}...`, 'gemini');
 
@@ -644,7 +664,12 @@ const App: React.FC = () => {
             const imgGenResp = await ai.models.generateImages({ 
               model: GEMINI_IMAGE_MODEL, 
               prompt: imagePpt, 
-              config: { numberOfImages: 1, outputMimeType: 'image/jpeg' } 
+              config: { 
+                numberOfImages: 1, 
+                outputMimeType: 'image/jpeg',
+                // Add safety settings for image generation if applicable/different
+                // safetySettings: settings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any}))
+              } 
             });
             if (imgGenResp.generatedImages?.[0]?.image?.imageBytes) {
               finalFileToPost = await base64ToFile(imgGenResp.generatedImages[0].image.imageBytes, `gemini_img_${Date.now()}.jpg`, imgGenResp.generatedImages[0].image.mimeType || 'image/jpeg');
@@ -891,16 +916,22 @@ const runBotCycleCallback = useCallback(async () => {
             historyForGeminiCall.push({ role: 'user', parts: currentUserMessageParts, timestamp: Date.now(), id: `user-dvach-${targetPost.num}`}); 
             
             try {
+                const botGenConfig: GenerateContentParameters['config'] = {
+                    systemInstruction: currentBotSettings.autonomousBotSystemPrompt, 
+                    temperature: 0.85, topK: 50, topP: 0.95, 
+                    maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
+                    responseMimeType: "application/json", 
+                    responseSchema: { type: Type.OBJECT, properties: { replyText: { type: Type.STRING } }, required: ["replyText"] },
+                    safetySettings: currentBotSettings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})),
+                };
+                if (currentBotSettings.autonomousBotDisableThinking) {
+                    botGenConfig.thinkingConfig = { thinkingBudget: 0 };
+                } // else, omit to use default thinking
+
                 const geminiApiResponse = await ai.models.generateContent({
                     model: GEMINI_TEXT_MODEL,
                     contents: historyForGeminiCall, 
-                    config: {
-                        systemInstruction: currentBotSettings.autonomousBotSystemPrompt, 
-                        temperature: 0.85, topK: 50, topP: 0.95, 
-                        maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
-                        responseMimeType: "application/json", 
-                        responseSchema: { type: Type.OBJECT, properties: { replyText: { type: Type.STRING } }, required: ["replyText"] },
-                    }
+                    config: botGenConfig
                 });
 
                 const textToParse = geminiApiResponse.text;
@@ -908,11 +939,17 @@ const runBotCycleCallback = useCallback(async () => {
                     const parsedReply = parseGeminiJsonResponse<BotReplySchema>(textToParse);
                     if (parsedReply && parsedReply.replyText) {
                         let rawReplyBody = parsedReply.replyText.trim();
-                        rawReplyBody = rawReplyBody.replace(new RegExp(`^>>${targetPost.num}\\s*\\n?`), '').trim();
-                        const finalCommentToPost = `>>${targetPost.num}\n${rawReplyBody}`; 
+                        const quotePatternForBot = new RegExp(`^>>${targetPost.num}\\s*\\n?`);
+                        if (quotePatternForBot.test(rawReplyBody)) { // Check if Gemini included the quote
+                           rawReplyBody = rawReplyBody.replace(quotePatternForBot, '').trim(); // Remove Gemini's quote
+                        }
+                        const finalCommentToPost = `>>${targetPost.num}\n${rawReplyBody}`; // Add our own consistent quote
                             
                         addAutonomousBotActivityLog(`Bot generated (JSON) reply for >>${targetPost.num}: ${rawReplyBody.substring(0, 70)}...`);
-                        await new Promise(resolve => window.setTimeout(resolve, Math.random() * 2000 + 1000)); 
+                        
+                        const replyDelay = Math.floor(Math.random() * (currentBotSettings.autonomousBotMaxReplyDelayMs - currentBotSettings.autonomousBotMinReplyDelayMs + 1)) + currentBotSettings.autonomousBotMinReplyDelayMs;
+                        addAutonomousBotActivityLog(`Waiting for ${replyDelay}ms before posting reply...`, 'bot_activity');
+                        await new Promise(resolve => window.setTimeout(resolve, replyDelay));
 
                         let finalFileToPostForBot: File | null = null;
                         if (currentBotSettings.geminiReplyWithGeneratedImage) {
@@ -1334,7 +1371,8 @@ useEffect(() => {
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
             Target: <span className="font-semibold">/{settings.autonomousBotTargetBoard.trim() || "[Not Set]"}/{settings.autonomousBotTargetThreadId.trim() || "[Not Set]"}</span> | 
             Mode: <span className="font-semibold">{settings.autonomousBotReplyMode.replace(/_/g, ' ')}</span> | 
-            Interval: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}s</span>
+            Interval: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}s</span> |
+            Reply Delay: <span className="font-semibold">{settings.autonomousBotMinReplyDelayMs}-{settings.autonomousBotMaxReplyDelayMs}ms</span>
         </p>
         <div className="max-h-60 overflow-y-auto bg-gray-50 dark:bg-gray-900 p-2 rounded border border-gray-200 dark:border-gray-700 custom-scrollbar">
             {autonomousBotActivityLog.length === 0 && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">No bot activity yet.</p>}
@@ -1483,6 +1521,10 @@ useEffect(() => {
                   <input aria-label="User Gemini API Key" type="password" placeholder="Enter your Gemini API Key" value={settings.userGeminiApiKey} onChange={e => handleUpdateSettings({userGeminiApiKey: e.target.value})} autoComplete="new-password" className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
                 )}
             </div>
+             {/* Placeholder for Gemini Safety Settings UI */}
+            <div className="p-2 border-t border-gray-200 dark:border-gray-600">
+                <p className="text-sm text-gray-600 dark:text-gray-400">Gemini Safety Settings UI placeholder. Currently uses defaults: {DEFAULT_GEMINI_SAFETY_SETTINGS.map(s => `${s.category}:${s.threshold}`).join(', ')}.</p>
+            </div>
             <label className="flex items-center">
               <input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e => handleUpdateSettings({geminiAnalyzeOpMedia: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
               Gemini: Analyze Media in OP Posts (Manual Reply)
@@ -1546,6 +1588,20 @@ useEffect(() => {
                 <label htmlFor="botInterval" className="block text-sm font-medium">Bot Cycle Interval (seconds):</label>
                 <input id="botInterval" type="number" min="10" value={settings.autonomousBotCycleIntervalSeconds} onChange={e => handleUpdateSettings({autonomousBotCycleIntervalSeconds: parseInt(e.target.value)})} className="mt-1 w-full p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"/>
             </div>
+             <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label htmlFor="botMinReplyDelay" className="block text-sm font-medium">Min Reply Delay (ms):</label>
+                    <input id="botMinReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMinReplyDelayMs} onChange={e => handleUpdateSettings({autonomousBotMinReplyDelayMs: parseInt(e.target.value)})} className="mt-1 w-full p-2 border r"/>
+                 </div>
+                 <div>
+                    <label htmlFor="botMaxReplyDelay" className="block text-sm font-medium">Max Reply Delay (ms):</label>
+                    <input id="botMaxReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMaxReplyDelayMs} onChange={e => handleUpdateSettings({autonomousBotMaxReplyDelayMs: parseInt(e.target.value)})} className="mt-1 w-full p-2 border r"/>
+                 </div>
+             </div>
+             <label className="flex items-center">
+              <input type="checkbox" checked={settings.autonomousBotDisableThinking} onChange={e => handleUpdateSettings({autonomousBotDisableThinking: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
+              Bot: Disable Thinking Process (for speed, lower quality)
+            </label>
             <label className="flex items-center">
               <input type="checkbox" checked={settings.autonomousBotAllowReplyToSelf} onChange={e => handleUpdateSettings({autonomousBotAllowReplyToSelf: e.target.checked})} className="mr-2 h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"/>
               Bot: Allow Reply to Own Posts (if eligible)

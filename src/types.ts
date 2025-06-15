@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { Chat as GeminiChatInstanceType, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason } from "@google/genai";
+import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as GeminiGenerateContentResponseSDK, FinishReason, HarmCategory as GenAIHarmCategory, HarmBlockThreshold as GenAIHarmBlockThreshold } from "@google/genai";
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -146,6 +146,26 @@ export type AutonomousBotInitialContextScope =
   | 'op_only'
   | 'full_thread';
 
+// Using string literals for HarmCategory and HarmBlockThreshold as enums might not be available in ESM build
+export type HarmCategoryStrings = 
+  | "HARM_CATEGORY_UNSPECIFIED"
+  | "HARM_CATEGORY_HARASSMENT"
+  | "HARM_CATEGORY_HATE_SPEECH"
+  | "HARM_CATEGORY_SEXUALLY_EXPLICIT"
+  | "HARM_CATEGORY_DANGEROUS_CONTENT";
+
+export type HarmBlockThresholdStrings =
+  | "HARM_BLOCK_THRESHOLD_UNSPECIFIED"
+  | "BLOCK_ONLY_HIGH"
+  | "BLOCK_MEDIUM_AND_ABOVE"
+  | "BLOCK_LOW_AND_ABOVE"
+  | "BLOCK_NONE";
+
+export interface SafetySettingRule {
+  category: HarmCategoryStrings;
+  threshold: HarmBlockThresholdStrings;
+}
+
 export interface AppSettings {
   // Global Dvach Settings (used by Manual Ops tab inputs primarily)
   board: string; 
@@ -175,6 +195,7 @@ export interface AppSettings {
   geminiReplyWithGeneratedImage: boolean; 
   maxImagesToAnalyzePerPost: number; 
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
+  geminiSafetySettings: SafetySettingRule[]; // New for safety settings
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string; 
@@ -185,7 +206,10 @@ export interface AppSettings {
   autonomousBotCycleIntervalSeconds: number; 
   autonomousBotAllowReplyToSelf: boolean; 
   autonomousBotInitialContextScope: AutonomousBotInitialContextScope;
-  autonomousBotFullThreadContextMaxChars: number; // New setting for full thread context length
+  autonomousBotFullThreadContextMaxChars: number; 
+  autonomousBotMinReplyDelayMs: number; // New
+  autonomousBotMaxReplyDelayMs: number; // New
+  autonomousBotDisableThinking: boolean; // New
 
   // Gemini Model Configuration (mainly for manual replies; bot might use simplified or system prompt dictates style)
   geminiSystemInstruction: string; // For manual replies primarily
@@ -228,7 +252,7 @@ export interface ChatMessage {
   isLoading?: boolean; 
 }
 
-export type GeminiChat = GeminiChatInstanceType; 
+export type GeminiChatInstance = GeminiChatInstanceTypeSDK; // Use SDK type
 
 export interface GeneratedImage { 
   base64Data: string; 
@@ -242,7 +266,7 @@ export interface GeminiDvachConversation {
   threadId: string;
   triggerPostNum: string; // The post num that initiated this specific interaction or seed. For bot context, could be OP.
   botSystemPromptUsed: string; // The system prompt active when this conversation context was primarily built or last acted upon by bot.
-  geminiChatInstance?: GeminiChat; // Stored initialized chat for conversational mode (currently not fully utilized by bot, history is primary)
+  geminiChatInstance?: GeminiChatInstance; // Stored initialized chat for conversational mode (currently not fully utilized by bot, history is primary)
   history: ChatMessage[]; // Full history including initial system prompt, user posts (formatted), and bot model replies.
   lastCheckedTimestamp: number; // When this thread was last processed by the bot.
   lastBotReplyNum?: string; // The Dvach post number of the bot's last reply in this context.
@@ -275,7 +299,7 @@ export interface GroundingChunk {
 
 export interface GroundingMetadata {
   webSearchQueries?: string[];
-  groundingAttribution?: { // Corrected from groundingChunks
+  groundingAttribution?: { 
      sourceId: string;
      content: {
        text: string;
