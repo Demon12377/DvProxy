@@ -1,6 +1,6 @@
 
 import { DvachThreadResponse, DvachPostApiResponse, DvachApiError, ProxyModeForGET, DvachSessionCookies, DvachPost } from '../types';
-import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT, PROXY_URL_CODETABS_BASE, DVACH_DOMAINS } from '../constants';
+import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT, PROXY_URL_CODETABS_BASE } from '../constants'; // Removed DVACH_DOMAINS
 
 interface CachedThread {
   data: DvachThreadResponse;
@@ -44,10 +44,8 @@ export function buildProxiedGetUrl(
       }
       return `${customProxyUrl}${encodeURIComponent(targetUrl)}`;
     case 'vercel_serverless': 
-         // This mode is for API calls like /api/get-thread, not for arbitrary external URLs.
-         // If an external URL is passed with this mode, it's likely a misconfiguration.
-         console.warn(`[dvachService/buildProxiedGetUrl] 'vercel_serverless' proxy mode used for external URL '${targetUrl}'. This is typically for /api/* endpoints. Using direct fetch for this URL.`);
-         return targetUrl;
+         console.warn(`[dvachService/buildProxiedGetUrl] 'vercel_serverless' proxy mode used for client-side construction with external URL '${targetUrl}'. This is typically handled by direct /api/* calls. Verify configuration if this was unintended. Using direct fetch for this URL if it's external.`);
+         return targetUrl; // This function is for client-side URL construction. If it's an external URL, this mode shouldn't apply here.
     case 'none':
     default:
       return targetUrl;
@@ -55,28 +53,32 @@ export function buildProxiedGetUrl(
 }
 
 export async function getThreadData(
+  baseDvachDomain: string, // New parameter
   board: string, 
   threadId: string,
   proxyModeForGET: ProxyModeForGET, 
   customProxyUrlForGET?: string,
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachThreadResponse> {
+  if (!baseDvachDomain) {
+    throw new Error("Base Dvach Domain is required for getThreadData.");
+  }
   if (!board || !threadId) {
     throw new Error("Board and Thread ID are required for getThreadData.");
   }
 
-  const cacheKey = `dvach_thread_${board}_${threadId}`;
+  const cacheKey = `dvach_thread_${baseDvachDomain}_${board}_${threadId}`;
   const cachedItem = localStorage.getItem(cacheKey);
 
   if (cachedItem) {
     try {
       const parsedCache: CachedThread = JSON.parse(cachedItem);
       if (Date.now() - parsedCache.timestamp < THREAD_CACHE_DURATION_MS) {
-        console.info(`[dvachService/getThreadData] Cache hit for ${board}/${threadId}`);
+        console.info(`[dvachService/getThreadData] Cache hit for ${baseDvachDomain}/${board}/${threadId}`);
         return parsedCache.data;
       }
       localStorage.removeItem(cacheKey);
-      console.info(`[dvachService/getThreadData] Cache stale for ${board}/${threadId}`);
+      console.info(`[dvachService/getThreadData] Cache stale for ${baseDvachDomain}/${board}/${threadId}`);
     } catch (error) {
       console.warn("[dvachService/getThreadData] Failed to parse cached thread data, removing.", error);
       localStorage.removeItem(cacheKey);
@@ -87,10 +89,11 @@ export async function getThreadData(
   let targetDvachUrl: string | undefined; 
 
   if (proxyModeForGET === 'vercel_serverless') {
+    // Note: /api/get-thread internally targets 2ch.hk, this client-setting doesn't change that serverless function's target.
     fetchUrl = `/api/get-thread?board=${encodeURIComponent(board)}&thread=${encodeURIComponent(threadId)}`;
-    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl}`);
+    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.hk)`);
   } else {
-    targetDvachUrl = `${DVACH_DOMAINS[0]}/${board}/res/${threadId}.json`; 
+    targetDvachUrl = `${baseDvachDomain}/${board}/res/${threadId}.json`; 
     fetchUrl = buildProxiedGetUrl(targetDvachUrl, proxyModeForGET, customProxyUrlForGET);
     console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetDvachUrl})`);
   }
@@ -99,19 +102,19 @@ export async function getThreadData(
   try {
     response = await fetch(fetchUrl, {
       headers: {
-        ...(proxyModeForGET !== 'vercel_serverless' && { 'User-Agent': userAgent }),
+        ...(proxyModeForGET !== 'vercel_serverless' && { 'User-Agent': userAgent }), // User-Agent not needed for our own /api endpoint
         'Accept': 'application/json',
       }
     });
   } catch (networkError) {
     console.error(`[dvachService/getThreadData] Network error fetching ${fetchUrl}:`, networkError);
-    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless)'}`);
+    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}`);
   }
 
   const responseBodyText = await response.text();
   if (!response.ok) {
     console.error(`[dvachService/getThreadData] Failed to fetch thread ${board}/${threadId} from ${fetchUrl}. Status: ${response.status}. Response: ${responseBodyText.substring(0,500)}`);
-    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless)'}. Server/Proxy response: ${responseBodyText.substring(0,200)}`);
+    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}. Server/Proxy response: ${responseBodyText.substring(0,200)}`);
   }
 
   let data: DvachThreadResponse;
@@ -128,7 +131,7 @@ export async function getThreadData(
 
   } catch (jsonError) {
     console.error(`[dvachService/getThreadData] Failed to parse JSON response from ${fetchUrl}. Error:`, jsonError, "Response text:", responseBodyText.substring(0, 500));
-    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${targetDvachUrl || 'N/A (Serverless)'}. Details: ${responseBodyText.substring(0,200)}`);
+    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}. Details: ${responseBodyText.substring(0,200)}`);
   }
   
   const cacheEntry: CachedThread = { data, timestamp: Date.now() };
@@ -146,7 +149,8 @@ export async function loginToDvach(
   purchasedPasscode: string,
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachSessionCookies> {
-  console.info('[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login...');
+  // This function uses /api/dvach-login, which internally targets 2ch.hk
+  console.info('[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login (targets 2ch.hk)...');
   
   let response;
   try {
@@ -197,8 +201,8 @@ export async function postWithSessionCookie(
   if (!sessionCookies.passcode_auth) {
     throw new Error("passcode_auth session cookie is missing. Cannot post. Please login.");
   }
-
-  console.info('[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post. Params:', { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
+  // This function uses /api/dvach-post, which internally targets 2ch.hk
+  console.info('[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post (targets 2ch.hk). Params:', { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
   
   const formData = new FormData();
   formData.append('passcode_auth_cookie_value', sessionCookies.passcode_auth);
@@ -322,4 +326,3 @@ export async function base64ToFile(base64: string, filename: string, mimeType: s
   const blob = await res.blob();
   return new File([blob], filename, { type: mimeType });
 }
-

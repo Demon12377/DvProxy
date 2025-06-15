@@ -42,6 +42,10 @@ const envKeyIsAvailableForDefaults = typeof process.env.API_KEY === 'string' && 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   board: "b",
   threadId: "",
+  dvachBaseDomainIndex: 0,
+  dvachDomainUsageMode: "predefined",
+  customDvachDomain: "",
+
   purchasedPasscode: "",
 
   geminiApiKeySource: envKeyIsAvailableForDefaults ? 'env' : 'user',

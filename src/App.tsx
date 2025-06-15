@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   GoogleGenAI,
   Part,
@@ -74,7 +74,7 @@ const App: React.FC = () => {
             console.warn("Environment API_KEY (process.env.API_KEY) was configured but is now missing. Switched to 'user' API key source.");
         }
     }
-    const numericKeys: (keyof AppSettings)[] = ['maxImagesToAnalyzePerPost', 'autonomousBotCycleIntervalSeconds', 'autonomousBotFullThreadContextMaxChars', 'geminiTemperature', 'geminiTopP', 'geminiTopK', 'geminiMaxOutputTokens', 'geminiThinkingBudget', 'autonomousBotMinReplyDelayMs', 'autonomousBotMaxReplyDelayMs', 'repetitivePostCount', 'repetitivePostDelay'];
+    const numericKeys: (keyof AppSettings)[] = ['maxImagesToAnalyzePerPost', 'autonomousBotCycleIntervalSeconds', 'autonomousBotFullThreadContextMaxChars', 'geminiTemperature', 'geminiTopP', 'geminiTopK', 'geminiMaxOutputTokens', 'geminiThinkingBudget', 'autonomousBotMinReplyDelayMs', 'autonomousBotMaxReplyDelayMs', 'repetitivePostCount', 'repetitivePostDelay', 'dvachBaseDomainIndex'];
     const booleanKeys: (keyof AppSettings)[] = ['geminiAnalyzeOpMedia', 'geminiAnalyzeAnonMedia', 'geminiReplyWithGeneratedImage', 'botAnalyzesImagesInTriggerPosts', 'autonomousBotAllowReplyToSelf', 'useThinkingBudget', 'autonomousBotDisableThinking', 'enableRepetitivePostingMode', 'enablePrefilledPostingMode', 'analyzeVideosInTriggerPosts'];
 
     numericKeys.forEach(key => {
@@ -88,8 +88,9 @@ const App: React.FC = () => {
     mergedInitialSettings.autonomousBotInitialContextScope = loadedSettings.autonomousBotInitialContextScope || DEFAULT_APP_SETTINGS.autonomousBotInitialContextScope;
     mergedInitialSettings.geminiSafetySettings = loadedSettings.geminiSafetySettings || DEFAULT_APP_SETTINGS.geminiSafetySettings;
     mergedInitialSettings.userAgent = loadedSettings.userAgent || generateUserAgent();
-    // Ensure newly added settings have defaults if not in loadedSettings
     mergedInitialSettings.geminiSystemInstruction = loadedSettings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
+    mergedInitialSettings.dvachDomainUsageMode = loadedSettings.dvachDomainUsageMode || DEFAULT_APP_SETTINGS.dvachDomainUsageMode;
+    mergedInitialSettings.customDvachDomain = loadedSettings.customDvachDomain || DEFAULT_APP_SETTINGS.customDvachDomain;
 
 
     return mergedInitialSettings;
@@ -147,6 +148,14 @@ const App: React.FC = () => {
   const autonomousBotIntervalRef = useRef<number | null>(null);
   const [currentBotOpMediaCache, setCurrentBotOpMediaCache] = useState<BotOpMediaCache | null>(null);
   const initBotJsonInfoLoggedRef = useRef(false);
+
+  const currentDvachBaseUrl = useMemo(() => {
+    if (settings.dvachDomainUsageMode === 'custom' && settings.customDvachDomain && settings.customDvachDomain.trim().startsWith('http')) {
+      return settings.customDvachDomain.trim().replace(/\/+$/, ""); // Remove trailing slashes
+    }
+    const idx = settings.dvachBaseDomainIndex;
+    return (idx >= 0 && idx < DVACH_DOMAINS.length) ? DVACH_DOMAINS[idx] : DVACH_DOMAINS[0];
+  }, [settings.dvachDomainUsageMode, settings.customDvachDomain, settings.dvachBaseDomainIndex]);
 
 
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info', data?: unknown) => {
@@ -310,8 +319,9 @@ const App: React.FC = () => {
     if (!isBotCycle) setFetchError(null);
     if (!isBotCycle) setCurrentFetchedDvachPosts([]);
     try {
-      if(!isBotCycle) addLog(`Fetching thread /${boardToFetch}/${threadToFetch}... Proxy for GET (thread data): ${settings.proxyModeForGET}`, 'dvach');
+      if(!isBotCycle) addLog(`Fetching thread /${boardToFetch}/${threadToFetch} using base URL ${currentDvachBaseUrl}... Proxy for GET (thread data): ${settings.proxyModeForGET}`, 'dvach');
       const data: DvachThreadResponse = await getThreadData(
+        currentDvachBaseUrl, // Pass the dynamic base URL
         boardToFetch,
         threadToFetch,
         settings.proxyModeForGET,
@@ -322,14 +332,14 @@ const App: React.FC = () => {
       const posts = data.threads?.[0]?.posts || [];
       if(!isBotCycle) {
         setCurrentFetchedDvachPosts(posts);
-        addLog(`Successfully fetched ${posts.length} posts from /${boardToFetch}/${threadToFetch}.`, 'success');
+        addLog(`Successfully fetched ${posts.length} posts from ${currentDvachBaseUrl}/${boardToFetch}/${threadToFetch}.`, 'success');
         if (threadPostsContainerRef.current) threadPostsContainerRef.current.scrollTop = 0;
       }
       return posts;
     } catch (err) {
       const errorMsg = (err as Error).message;
       if(!isBotCycle) setFetchError(errorMsg);
-      addLog(`Failed to fetch thread /${boardToFetch}/${threadToFetch}: ${errorMsg}`, isBotCycle ? 'bot_error' : 'error', err);
+      addLog(`Failed to fetch thread ${currentDvachBaseUrl}/${boardToFetch}/${threadToFetch}: ${errorMsg}`, isBotCycle ? 'bot_error' : 'error', err);
       if (!isBotCycle) setCurrentFetchedDvachPosts([]);
       return null;
     } finally {
@@ -344,7 +354,7 @@ const App: React.FC = () => {
     }
     setIsDvachLoggingIn(true);
     setFetchError(null);
-    addLog("Attempting to log into Dvach with purchased passcode...", 'auth');
+    addLog("Attempting to log into Dvach with purchased passcode (via /api/dvach-login, targets 2ch.hk)...", 'auth');
     try {
       const cookies = await loginToDvach(settings.purchasedPasscode, settings.userAgent);
       setDvachSessionCookies(cookies);
@@ -370,8 +380,8 @@ const App: React.FC = () => {
     useSageFlag: boolean,
     boardToPostInput: string,
     threadIdForDvachApiInput: string,
-    userAgentToUse: string, // Added userAgent as parameter
-    dvachSessionCookiesToUse: DvachSessionCookies | null, // Added session cookies as parameter
+    userAgentToUse: string, 
+    dvachSessionCookiesToUse: DvachSessionCookies | null, 
     replyToPostNumForDvachApi?: string
   ): Promise<string> => {
     const boardToPost = boardToPostInput.trim();
@@ -381,7 +391,6 @@ const App: React.FC = () => {
     if (!dvachSessionCookiesToUse?.passcode_auth) {
       const errorMsg = 'Not logged into Dvach or session expired. Please login first.';
       addLog(errorMsg, 'auth');
-      // Removed UI specific updates like addPostActivity & setFetchError
       throw new Error(errorMsg);
     }
     if (!boardToPost || !comment.trim()) {
@@ -393,10 +402,10 @@ const App: React.FC = () => {
     const effectiveThreadIdForDvach = (!threadIdForDvachApi || threadIdForDvachApi === "0") ? "0" : threadIdForDvachApi;
   
     const targetDesc = effectiveThreadIdForDvach === "0" ? 'new thread' : `thread ${effectiveThreadIdForDvach}`;
-    const logMsg = `Attempting to post to /${boardToPost}/${targetDesc}${finalReplyToPostNum ? ` (reply to >>${finalReplyToPostNum})` : ''}. Comment: "${comment.substring(0,50)}..."`;
+    const logMsg = `Attempting to post to /${boardToPost}/${targetDesc}${finalReplyToPostNum ? ` (reply to >>${finalReplyToPostNum})` : ''} (via /api/dvach-post, targets 2ch.hk). Comment: "${comment.substring(0,50)}..."`;
     addLog(logMsg, 'dvach');
   
-    setIsPosting(true); // Global posting lock
+    setIsPosting(true); 
     try {
       const result = await postWithSessionCookie(
         dvachSessionCookiesToUse,
@@ -412,7 +421,7 @@ const App: React.FC = () => {
       const newPostNum = String(result.num || result.thread || result.target || Date.now());
       addLog(`Post successful! Dvach response: Num: ${newPostNum}`, 'success', result);
   
-      setSentMessages(prevSentMessages => { // Global state update
+      setSentMessages(prevSentMessages => { 
         const newSentMessage: SentMessageInfo = {
           num: newPostNum,
           timestamp: Date.now(),
@@ -427,9 +436,8 @@ const App: React.FC = () => {
       return newPostNum;
     } catch (err) {
       const error = err as Error;
-      // Let caller handle Dvach API error specifics
       addLog(`Failed to post (commonPostToDvach): ${error.message}`, 'error', error);
-      throw error; // Re-throw for caller to handle UI
+      throw error; 
     } finally {
       setIsPosting(false);
     }
@@ -451,7 +459,7 @@ const App: React.FC = () => {
         threadTargetForDvach,
         settings.userAgent,
         dvachSessionCookies,
-        undefined // No specific replyTo for simple post from panel top section
+        undefined 
       );
       addPostActivity(`Manual post successful!`);
       setPostText('');
@@ -463,7 +471,7 @@ const App: React.FC = () => {
       const dvachApiError = extractDvachApiError(e);
       if (dvachApiError && (dvachApiError.code === -4 || dvachApiError.code === -6 || dvachApiError.code === -21 || dvachApiError.message.toLowerCase().includes("постинг запрещён") || dvachApiError.message.toLowerCase().includes("доступ запрещен"))) {
         addLog(`Session likely expired or invalid for manual post. Please log in again. Error: ${dvachApiError.message}`, 'auth');
-        setDvachSessionCookies(null); // Clear potentially invalid session
+        setDvachSessionCookies(null); 
       }
     }
   };
@@ -481,8 +489,8 @@ const App: React.FC = () => {
 
     setGeminiLoading(true);
     const taskId = addTask('gemini_request', `Manual Gemini reply to >>${targetPost.num}`);
-    addLog(`Gemini preparing manual reply to post >>${targetPost.num} on /${boardForReply}/${threadForReply}...`, 'gemini');
-    setFetchError(null); // Clear previous errors from manual panel
+    addLog(`Gemini preparing manual reply to post >>${targetPost.num} on ${currentDvachBaseUrl}/${boardForReply}/${threadForReply}...`, 'gemini');
+    setFetchError(null); 
 
     let systemInstructionForReply = settings.geminiSystemInstruction || DEFAULT_APP_SETTINGS.geminiSystemInstruction;
 
@@ -502,7 +510,7 @@ const App: React.FC = () => {
     if (recentPostsText) threadContextSummary += `Some recent posts in thread context:\n${recentPostsText}\n`;
 
 
-    let userPromptText = `You are on the imageboard ${DVACH_DOMAINS[0]}/${boardForReply}/${threadForReply}.\nOverall thread context:\n${threadContextSummary}\n\nNow, focus on crafting a reply to this specific post:\nPost >>${targetPost.num} (by ${targetPost.name || 'Anonymous'}) says:\n"${targetPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '').substring(0, 1000)}"`;
+    let userPromptText = `You are on the imageboard ${currentDvachBaseUrl}/${boardForReply}/${threadForReply}.\nOverall thread context:\n${threadContextSummary}\n\nNow, focus on crafting a reply to this specific post:\nPost >>${targetPost.num} (by ${targetPost.name || 'Anonymous'}) says:\n"${targetPost.comment.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>?/gm, '').substring(0, 1000)}"`;
 
     const geminiMessageParts: Part[] = [];
     let imageFilesToAnalyze: DvachFile[] = [];
@@ -513,7 +521,7 @@ const App: React.FC = () => {
                                 (settings.geminiAnalyzeAnonMedia && !isOpPost);
         if (analysisEnabled) {
             imageFilesToAnalyze = targetPost.files
-                .filter(file => (file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9)) // Common image types
+                .filter(file => (file.type === 1 || file.type === 2 || file.type === 4 || file.type === 9)) 
                 .slice(0, settings.maxImagesToAnalyzePerPost);
         }
     }
@@ -522,8 +530,7 @@ const App: React.FC = () => {
         userPromptText += `\n\nThe post >>${targetPost.num} includes ${imageFilesToAnalyze.length} image(s) (e.g., "${imageFilesToAnalyze[0].name}"). Please analyze these images as part of your reply generation.`;
         for (const dvachImageFile of imageFilesToAnalyze) {
             try {
-                const imageBaseUrl = DVACH_DOMAINS[0]; 
-                const imageUrl = `${imageBaseUrl}${dvachImageFile.path}`;
+                const imageUrl = `${currentDvachBaseUrl}${dvachImageFile.path}`; // Use dynamic base URL
                 const proxiedImageUrl = buildProxiedGetUrl(imageUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
                 addLog(`Fetching image ${dvachImageFile.name} for Gemini analysis (manual reply) using proxy mode '${settings.proxyModeForImagesGET}' from ${proxiedImageUrl} (target: ${imageUrl})`, 'gemini');
 
@@ -642,7 +649,7 @@ const App: React.FC = () => {
       const newPostNumByGemini = await commonPostToDvach(
         geminiReplyText, 
         finalFileToPost, 
-        postUseSage, // use sage from manual panel for this type of reply
+        postUseSage, 
         boardForReply, 
         threadForReply, 
         settings.userAgent,
@@ -659,7 +666,7 @@ const App: React.FC = () => {
     } catch (error) {
       const errorMsg = (error as Error).message;
       addLog(`Error during manual Gemini reply for >>${targetPost.num}: ${errorMsg}`, 'error', error);
-      setFetchError(errorMsg); // Show error in manual panel
+      setFetchError(errorMsg); 
       const dvachApiError = extractDvachApiError(error);
       if (dvachApiError && (dvachApiError.code === -4 || dvachApiError.code === -6 || dvachApiError.code === -21 || dvachApiError.message.toLowerCase().includes("постинг запрещён") || dvachApiError.message.toLowerCase().includes("доступ запрещен"))) {
         addLog(`Session likely expired or invalid for Gemini reply. Please log in again. Error: ${dvachApiError.message}`, 'auth');
@@ -673,7 +680,7 @@ const App: React.FC = () => {
 
   const {
     autonomousBotTargetBoard, autonomousBotTargetThreadId, proxyModeForGET, customProxyUrlForGET, userAgent,
-    geminiAnalyzeOpMedia: botGeminiAnalyzeOpMedia, // aliased to avoid conflict if used in same scope
+    geminiAnalyzeOpMedia: botGeminiAnalyzeOpMedia, 
     proxyModeForImagesGET, customProxyUrlForImagesGET: botCustomProxyUrlForImagesGET, 
     maxImagesToAnalyzePerPost: botMaxImagesToAnalyzePerPost,
     autonomousBotSystemPrompt, autonomousBotReplyMode, 
@@ -682,7 +689,7 @@ const App: React.FC = () => {
     geminiSafetySettings: botGeminiSafetySettings, 
     autonomousBotInitialContextScope, autonomousBotFullThreadContextMaxChars,
     botAnalyzesImagesInTriggerPosts, autonomousBotAllowReplyToSelf
-  } = settings; // Destructure settings for runBotCycleCallback dependencies
+  } = settings; 
 
 const runBotCycleCallback = useCallback(async () => {
     if (!ai || !dvachSessionCookies?.passcode_auth) {
@@ -702,22 +709,22 @@ const runBotCycleCallback = useCallback(async () => {
     }
     const currentBotTargetKeyForCycle = `${botBoard}_${botThreadId}`;
     setAutonomousBotStatus(`Active - Running cycle for /${botBoard}/${botThreadId}...`);
-    addAutonomousBotActivityLog(`Starting bot cycle. Mode: ${autonomousBotReplyMode}. Target: /${botBoard}/${botThreadId}`, 'bot_activity');
+    addAutonomousBotActivityLog(`Starting bot cycle. Mode: ${autonomousBotReplyMode}. Target: ${currentDvachBaseUrl}/${botBoard}/${botThreadId}`, 'bot_activity');
 
     let workingConvoCandidate: GeminiDvachConversation | undefined;
-    setGeminiDvachConversations(prevConvos => { // Read from functional update to ensure latest
+    setGeminiDvachConversations(prevConvos => { 
         workingConvoCandidate = prevConvos.get(currentBotTargetKeyForCycle);
-        return prevConvos; // No change here, just reading
+        return prevConvos; 
     });
 
 
     try {
-        const threadPostsResponse = await getThreadData(botBoard, botThreadId, proxyModeForGET, customProxyUrlForGET, userAgent);
+        const threadPostsResponse = await getThreadData(currentDvachBaseUrl, botBoard, botThreadId, proxyModeForGET, customProxyUrlForGET, userAgent);
         const allPostsInThread = threadPostsResponse?.threads?.[0]?.posts || [];
         const opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
 
         if (!opPost) { 
-            addAutonomousBotActivityLog(`OP Post for /${botBoard}/${botThreadId} not found. Cannot build context or reply. Skipping cycle.`, 'bot_error');
+            addAutonomousBotActivityLog(`OP Post for ${currentDvachBaseUrl}/${botBoard}/${botThreadId} not found. Cannot build context or reply. Skipping cycle.`, 'bot_error');
             setAutonomousBotStatus(`Error: OP Post not found for /${botBoard}/${botThreadId}.`);
             setGeminiDvachConversations(prevConvos => {
                 const newConvos = new Map(prevConvos);
@@ -741,7 +748,7 @@ const runBotCycleCallback = useCallback(async () => {
         let initialContextTextForSystemMessage = "";
         const maxChars = autonomousBotFullThreadContextMaxChars > 0 ? autonomousBotFullThreadContextMaxChars : Infinity;
         if (autonomousBotInitialContextScope === 'full_thread') {
-            let ctx = `CONTEXT_START: Full thread /${botBoard}/${botThreadId}.\n`; let len = ctx.length;
+            let ctx = `CONTEXT_START: Full thread ${currentDvachBaseUrl}/${botBoard}/${botThreadId}.\n`; let len = ctx.length;
             for (const p of allPostsInThread) {
                 const s = `>>${p.num}(${p.name||'A'}):"${p.comment.replace(/<[^>]+>/g,'').substring(0,250)}"\n`;
                 if (len + s.length > maxChars && maxChars !== Infinity) { ctx += "...(truncated)\n"; break; }
@@ -750,7 +757,7 @@ const runBotCycleCallback = useCallback(async () => {
             initialContextTextForSystemMessage = ctx + "CONTEXT_END\n";
         } else { 
             const opText = opPost.comment.replace(/<[^>]+>/g, '').substring(0,1500) || "N/A";
-            initialContextTextForSystemMessage = `CONTEXT_START: OP(>>${opPost.num}) for /${botBoard}/${botThreadId}:\n"${opText}"\nCONTEXT_END\n`;
+            initialContextTextForSystemMessage = `CONTEXT_START: OP(>>${opPost.num}) for ${currentDvachBaseUrl}/${botBoard}/${botThreadId}:\n"${opText}"\nCONTEXT_END\n`;
         }
         
         let opMediaPartsForCtx: Part[] = [];
@@ -760,7 +767,7 @@ const runBotCycleCallback = useCallback(async () => {
                 if (opPost.files) {
                     for (const file of opPost.files.filter(f=>f.type===1||f.type===2||f.type===4||f.type===9).slice(0, botMaxImagesToAnalyzePerPost)) {
                         try {
-                            const imgUrl = `${DVACH_DOMAINS[0]}${file.path}`;
+                            const imgUrl = `${currentDvachBaseUrl}${file.path}`; // Use dynamic base URL
                             const proxiedUrl = buildProxiedGetUrl(imgUrl, proxyModeForImagesGET, botCustomProxyUrlForImagesGET);
                             const imgResp = await fetch(proxiedUrl); if(!imgResp.ok) throw new Error(`Proxy fetch failed ${imgResp.status}`);
                             const blob = await imgResp.blob(); let mime = blob.type; if(!mime||!mime.startsWith('image/')) mime=file.type===1?'image/jpeg':file.type===2?'image/png':file.type===4?'image/gif':file.type===9?'image/webp':'image/jpeg';
@@ -827,7 +834,7 @@ const runBotCycleCallback = useCallback(async () => {
                 if(botAnalyzesImagesInTriggerPosts && targetPost.files){
                     for(const f of targetPost.files.filter(fl=>(fl.type===1||fl.type===2||fl.type===4||fl.type===9)).slice(0, botMaxImagesToAnalyzePerPost)){ 
                         try{
-                            const iu=`${DVACH_DOMAINS[0]}${f.path}`;const piu=buildProxiedGetUrl(iu, proxyModeForImagesGET, botCustomProxyUrlForImagesGET);
+                            const iu=`${currentDvachBaseUrl}${f.path}`;const piu=buildProxiedGetUrl(iu, proxyModeForImagesGET, botCustomProxyUrlForImagesGET); // Use dynamic base URL
                             const ir=await fetch(piu);if(!ir.ok)throw new Error(`Proxy fetch failed ${ir.status}`);
                             const b=await ir.blob();let mt=b.type;if(!mt||!mt.startsWith('image/'))mt=f.type===1?'image/jpeg':f.type===2?'image/png':f.type===4?'image/gif':f.type===9?'image/webp':'image/jpeg';
                             const bs=await new Promise<string>((rs,rj)=>{const rdr=new FileReader();rdr.onloadend=()=>rs((rdr.result as string).split(',')[1]);rdr.onerror=rj;rdr.readAsDataURL(b);});
@@ -913,7 +920,7 @@ const runBotCycleCallback = useCallback(async () => {
             newConvos.set(currentBotTargetKeyForCycle, activeConversationForCycle);
             return newConvos;
         });
-        setAutonomousBotStatus(`Waiting (${settings.autonomousBotCycleIntervalSeconds}s) /${botBoard}/${botThreadId}`); // Use settings directly here
+        setAutonomousBotStatus(`Waiting (${settings.autonomousBotCycleIntervalSeconds}s) /${botBoard}/${botThreadId}`); 
         addAutonomousBotActivityLog("Bot cycle finished for /"+botBoard+"/"+botThreadId+".", 'bot_activity');
 
     } catch (cycleError) {
@@ -923,14 +930,14 @@ const runBotCycleCallback = useCallback(async () => {
          setGeminiDvachConversations(prevConvos => {
             const newConvos = new Map(prevConvos);
             const convoToUpdate = newConvos.get(currentBotTargetKeyForCycle);
-            if (convoToUpdate) { // If a conversation existed
+            if (convoToUpdate) { 
                 newConvos.set(currentBotTargetKeyForCycle, { ...convoToUpdate, lastCheckedTimestamp: Date.now(), status: 'error' as const });
-            } // If no convo, no update needed here on error
+            } 
             return newConvos;
         });
     }
 }, [
-    ai, dvachSessionCookies, 
+    ai, dvachSessionCookies, currentDvachBaseUrl, // Added currentDvachBaseUrl
     autonomousBotTargetBoard, autonomousBotTargetThreadId, proxyModeForGET, customProxyUrlForGET, userAgent,
     botGeminiAnalyzeOpMedia, proxyModeForImagesGET, botCustomProxyUrlForImagesGET, botMaxImagesToAnalyzePerPost,
     autonomousBotSystemPrompt, autonomousBotReplyMode, botGeminiReplyWithGeneratedImage,
@@ -938,10 +945,10 @@ const runBotCycleCallback = useCallback(async () => {
     botGeminiSafetySettings, autonomousBotInitialContextScope, autonomousBotFullThreadContextMaxChars,
     botAnalyzesImagesInTriggerPosts, autonomousBotAllowReplyToSelf,
     addAutonomousBotActivityLog, setAutonomousBotStatus,
-    setGeminiDvachConversations, // No longer depending on geminiDvachConversations value itself
-    sentMessages, // Still needed for read-only checks
+    setGeminiDvachConversations, 
+    sentMessages, 
     currentBotOpMediaCache, setCurrentBotOpMediaCache,
-    addLog, commonPostToDvach, autonomousBotActive, settings.autonomousBotCycleIntervalSeconds // Added interval from settings
+    addLog, commonPostToDvach, autonomousBotActive, settings.autonomousBotCycleIntervalSeconds 
   ]
 );
 
@@ -950,12 +957,6 @@ useEffect(() => {
     if (!autonomousBotActive) {
         if (autonomousBotIntervalRef.current) {
             window.clearInterval(autonomousBotIntervalRef.current);
-            // Task removal is tricky if ID isn't stored reliably accessible to cleanup.
-            // For now, let's assume one main bot task. If previous ID was stored, use it.
-            // This part might need a ref for botTaskId if it changes.
-            // Simplified: removeTask('bot_cycle'); // This was a generic ID, needs specific task ID
-            // For now, task removal is best effort if ID not available in this scope.
-            // A better way is to store the current bot task ID in a ref.
             autonomousBotIntervalRef.current = null;
         }
         setAutonomousBotStatus("Inactive - Bot Stopped");
@@ -977,7 +978,7 @@ useEffect(() => {
 
     addLog(`Autonomous bot starting... Interval: ${settings.autonomousBotCycleIntervalSeconds}s.`, 'bot_setup');
     setAutonomousBotStatus("Active - Preparing initial cycle...");
-    const botTaskId = addTask('bot_cycle', `Bot on /${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}`, () => {
+    const botTaskId = addTask('bot_cycle', `Bot on ${currentDvachBaseUrl}/${settings.autonomousBotTargetBoard}/${settings.autonomousBotTargetThreadId}`, () => { // Use currentDvachBaseUrl
         setAutonomousBotActive(false); 
         addLog("Autonomous bot explicitly stopped via task manager.", "bot_setup");
     });
@@ -1003,7 +1004,7 @@ useEffect(() => {
     };
 }, [
     autonomousBotActive, 
-    runBotCycleCallback, // This is now more stable
+    runBotCycleCallback, 
     settings.autonomousBotCycleIntervalSeconds, 
     settings.autonomousBotTargetBoard, 
     settings.autonomousBotTargetThreadId, 
@@ -1011,7 +1012,8 @@ useEffect(() => {
     dvachSessionCookies, 
     addLog, 
     addTask, 
-    removeTask
+    removeTask,
+    currentDvachBaseUrl // Added currentDvachBaseUrl
 ]);
 
   const toggleTheme = () => {
@@ -1093,7 +1095,7 @@ useEffect(() => {
           <span className="font-semibold text-gray-700 dark:text-gray-300">{post.name || 'Anonymous'}</span>
           {post.trip && <span className="ml-1 text-green-600 dark:text-green-400">{post.trip}</span>}
           {' - No. '}
-          <a href={`${DVACH_DOMAINS[0]}/${boardIdentifier}/res/${threadIdentifier}.html#${post.num}`} target="_blank" rel="noopener noreferrer" className="hover:underline text-blue-500 dark:text-blue-400" onClick={(e) => { e.preventDefault(); document.getElementById(`post-${post.num}`)?.scrollIntoView({behavior: 'smooth'}); }} aria-label={`Link to post number ${post.num} on Dvach`}>{post.num}</a>
+          <a href={`${currentDvachBaseUrl}/${boardIdentifier}/res/${threadIdentifier}.html#${post.num}`} target="_blank" rel="noopener noreferrer" className="hover:underline text-blue-500 dark:text-blue-400" onClick={(e) => { e.preventDefault(); document.getElementById(`post-${post.num}`)?.scrollIntoView({behavior: 'smooth'}); }} aria-label={`Link to post number ${post.num} on Dvach`}>{post.num}</a>
           {isMyPost && <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100">You</span>}
           {isGeminiPostByBot && <IconSparkles className="inline-block ml-1 h-3 w-3 text-purple-500" title="Posted by Gemini"/>}
         </span>
@@ -1103,9 +1105,8 @@ useEffect(() => {
       {post.files && post.files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {post.files.map((file, fileIndex) => {
-            const imageBaseUrl = DVACH_DOMAINS[0]; 
-            const fileUrl = `${imageBaseUrl}${file.path}`;
-            const thumbUrl = `${imageBaseUrl}${file.thumbnail}`;
+            const fileUrl = `${currentDvachBaseUrl}${file.path}`;
+            const thumbUrl = `${currentDvachBaseUrl}${file.thumbnail}`;
             const proxiedThumbUrl = buildProxiedGetUrl(thumbUrl, settings.proxyModeForImagesGET, settings.customProxyUrlForImagesGET);
             return (<a key={fileIndex} href={fileUrl} target="_blank" rel="noopener noreferrer" className="block w-24 h-24 group relative">
               <img src={proxiedThumbUrl} alt={file.name || `file ${fileIndex + 1}`} className="rounded object-cover w-full h-full border border-gray-300 dark:border-gray-500 group-hover:opacity-80 transition-opacity" loading="lazy" onError={(e) => { addLog(`Failed to load thumbnail via proxy '${settings.proxyModeForImagesGET}': ${proxiedThumbUrl}. Attempting direct. URL: ${thumbUrl}`, 'warning'); (e.target as HTMLImageElement).src = thumbUrl; (e.target as HTMLImageElement).onerror = null; }}/>
@@ -1197,7 +1198,7 @@ useEffect(() => {
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
         <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Bot Status & Activity</h3>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Status: <span className="font-semibold">{autonomousBotStatus}</span></p>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Target: <span className="font-semibold">/{settings.autonomousBotTargetBoard.trim()||"[NS]"}/{settings.autonomousBotTargetThreadId.trim()||"[NS]"}</span> | Mode: <span className="font-semibold">{settings.autonomousBotReplyMode.replace(/_/g,' ')}</span> | Interval: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}s</span></p>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Target: <span className="font-semibold">{currentDvachBaseUrl}/{settings.autonomousBotTargetBoard.trim()||"[NS]"}/{settings.autonomousBotTargetThreadId.trim()||"[NS]"}</span> | Mode: <span className="font-semibold">{settings.autonomousBotReplyMode.replace(/_/g,' ')}</span> | Interval: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}s</span></p>
         {activeTasks.filter(t=>t.type==='bot_cycle').length > 0 && <p className="text-xs text-green-600 dark:text-green-400">Active Bot Task ID: {activeTasks.find(t=>t.type==='bot_cycle')?.id}</p>}
         <div className="max-h-60 overflow-y-auto bg-gray-50 dark:bg-gray-900 p-2 rounded border border-gray-200 dark:border-gray-700 custom-scrollbar">{autonomousBotActivityLog.length===0 && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">No bot activity.</p>}{autonomousBotActivityLog.map((log,idx) => (<p key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-0.5 font-mono">{log}</p>))}</div>
       </div>
@@ -1222,6 +1223,31 @@ useEffect(() => {
         <div className="mt-3 space-y-3">
             <div><label htmlFor="settingsBoard" className="block text-sm font-medium">Default Board (Manual Ops):</label><input id="settingsBoard" type="text" value={settings.board} onChange={e=>handleUpdateSettings({board:e.target.value})} className="input-field mt-1"/></div>
             <div><label htmlFor="settingsThreadId" className="block text-sm font-medium">Default Thread ID (Manual Ops):</label><input id="settingsThreadId" type="text" value={settings.threadId} onChange={e=>handleUpdateSettings({threadId:e.target.value})} className="input-field mt-1"/></div>
+            <div>
+              <label htmlFor="settingsDomainUsageMode" className="block text-sm font-medium">Dvach Base Domain (for client-side URLs):</label>
+              <select id="settingsDomainUsageMode" value={settings.dvachDomainUsageMode} onChange={e => handleUpdateSettings({ dvachDomainUsageMode: e.target.value as 'predefined' | 'custom' })} className="input-field mt-1">
+                <option value="predefined">Use Predefined Domain</option>
+                <option value="custom">Use Custom Domain</option>
+              </select>
+            </div>
+            {settings.dvachDomainUsageMode === 'predefined' && (
+              <div>
+                <label htmlFor="settingsDvachBaseDomainIndex" className="block text-sm font-medium">Predefined Domain:</label>
+                <select id="settingsDvachBaseDomainIndex" value={settings.dvachBaseDomainIndex} onChange={e => handleUpdateSettings({ dvachBaseDomainIndex: parseInt(e.target.value) })} className="input-field mt-1">
+                  {DVACH_DOMAINS.map((domain, index) => (
+                    <option key={index} value={index}>{domain}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {settings.dvachDomainUsageMode === 'custom' && (
+              <div>
+                <label htmlFor="settingsCustomDvachDomain" className="block text-sm font-medium">Custom Dvach Domain URL:</label>
+                <input id="settingsCustomDvachDomain" type="url" placeholder="e.g., https://2ch.life" value={settings.customDvachDomain} onChange={e => handleUpdateSettings({ customDvachDomain: e.target.value })} className="input-field mt-1" />
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Ensure it's a valid base URL (e.g., https://custom.domain). No trailing slash needed.</p>
+              </div>
+            )}
+             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Current effective base domain: <strong className="text-indigo-500">{currentDvachBaseUrl}</strong>. Note: Serverless functions for posting/login still target 2ch.hk.</p>
             <div><label htmlFor="settingsPasscode" className="block text-sm font-medium">Purchased Passcode:</label><input id="settingsPasscode" type="password" value={settings.purchasedPasscode} onChange={e=>handleUpdateSettings({purchasedPasscode:e.target.value})} autoComplete="new-password" placeholder="Your Dvach Passcode" className="input-field mt-1"/></div>
             <div><label htmlFor="settingsUserAgent" className="block text-sm font-medium">User Agent:</label><input id="settingsUserAgent" type="text" value={settings.userAgent} onChange={e=>handleUpdateSettings({userAgent:e.target.value})} className="input-field mt-1"/><button onClick={()=>handleUpdateSettings({userAgent:generateUserAgent()})} className="btn-secondary text-xs mt-1">Generate New</button></div>
              <div className="mt-2"><label className="block text-sm font-medium text-gray-400 dark:text-gray-500">(Debug) File Upload:</label><input type="file" onChange={(e)=>handleFileUpload(e)} className="input-file-sm"/></div>
@@ -1231,7 +1257,7 @@ useEffect(() => {
         <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">CORS Proxy (Client GETs)</summary>
         <div className="mt-3 space-y-3">
             <p className="text-xs text-gray-500 dark:text-gray-400">For client-side GET requests (e.g., images, or thread data if not serverless). Dvach POSTs use serverless functions.</p>
-            <div><label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium">Proxy for Thread Data:</label><select id="settingsProxyModeForGET" value={settings.proxyModeForGET} onChange={e=>handleUpdateSettings({proxyModeForGET:e.target.value as ProxyModeForGET})} className="input-field mt-1"><option value="vercel_serverless">Vercel Serverless (Recommended)</option><option value="custom_cors_anywhere">CORS Anywhere Style</option><option value="custom_go_x2u">go.x2u.in Style</option><option value="custom_codetabs">CodeTabs Style</option><option value="custom_general_prefix">General Prefix Proxy</option><option value="custom_general_param">General Param Proxy</option><option value="none">No Proxy</option></select>{settings.proxyModeForGET!=='vercel_serverless'&&settings.proxyModeForGET!=='none'&&(<input type="text" placeholder="Custom Proxy URL for Thread Data" value={settings.customProxyUrlForGET} onChange={e=>handleUpdateSettings({customProxyUrlForGET:e.target.value})} className="input-field mt-1"/>)}</div>
+            <div><label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium">Proxy for Thread Data:</label><select id="settingsProxyModeForGET" value={settings.proxyModeForGET} onChange={e=>handleUpdateSettings({proxyModeForGET:e.target.value as ProxyModeForGET})} className="input-field mt-1"><option value="vercel_serverless">Vercel Serverless (Targets 2ch.hk)</option><option value="custom_cors_anywhere">CORS Anywhere Style</option><option value="custom_go_x2u">go.x2u.in Style</option><option value="custom_codetabs">CodeTabs Style</option><option value="custom_general_prefix">General Prefix Proxy</option><option value="custom_general_param">General Param Proxy</option><option value="none">No Proxy</option></select>{settings.proxyModeForGET!=='vercel_serverless'&&settings.proxyModeForGET!=='none'&&(<input type="text" placeholder="Custom Proxy URL for Thread Data" value={settings.customProxyUrlForGET} onChange={e=>handleUpdateSettings({customProxyUrlForGET:e.target.value})} className="input-field mt-1"/>)}</div>
             <div><label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium">Proxy for Images/Media:</label><select id="settingsProxyModeForImagesGET" value={settings.proxyModeForImagesGET} onChange={e=>handleUpdateSettings({proxyModeForImagesGET:e.target.value as ProxyModeForGET})} className="input-field mt-1"><option value="custom_codetabs">CodeTabs Style (Default Images)</option><option value="custom_cors_anywhere">CORS Anywhere Style</option><option value="custom_go_x2u">go.x2u.in Style</option><option value="custom_general_prefix">General Prefix Proxy</option><option value="custom_general_param">General Param Proxy</option><option value="none">No Proxy</option></select>{settings.proxyModeForImagesGET!=='none'&&(<input type="text" placeholder="Custom Proxy URL for Images" value={settings.customProxyUrlForImagesGET} onChange={e=>handleUpdateSettings({customProxyUrlForImagesGET:e.target.value})} className="input-field mt-1"/>)}</div>
         </div>
       </details>

@@ -170,6 +170,9 @@ export interface AppSettings {
   // Global Dvach Settings (used by Manual Ops tab inputs primarily)
   board: string;
   threadId: string;
+  dvachBaseDomainIndex: number; // New: Index for DVACH_DOMAINS
+  dvachDomainUsageMode: 'predefined' | 'custom'; // New: Mode for domain usage
+  customDvachDomain: string; // New: Custom domain URL
 
   purchasedPasscode: string;
 
@@ -195,7 +198,7 @@ export interface AppSettings {
   geminiReplyWithGeneratedImage: boolean;
   maxImagesToAnalyzePerPost: number;
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
-  geminiSafetySettings: SafetySettingRule[]; // Added
+  geminiSafetySettings: SafetySettingRule[]; 
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string;
@@ -205,14 +208,14 @@ export interface AppSettings {
   autonomousBotReplyMode: AutonomousBotReplyMode;
   autonomousBotCycleIntervalSeconds: number;
   autonomousBotAllowReplyToSelf: boolean;
-  autonomousBotInitialContextScope: AutonomousBotInitialContextScope; // Added
+  autonomousBotInitialContextScope: AutonomousBotInitialContextScope; 
   autonomousBotFullThreadContextMaxChars: number;
   autonomousBotMinReplyDelayMs: number;
   autonomousBotMaxReplyDelayMs: number;
   autonomousBotDisableThinking: boolean;
 
   // Gemini Model Configuration (for Manual Gemini Replies to Dvach posts)
-  geminiSystemInstruction: string; // System instruction for Manual Gemini Replies - Added
+  geminiSystemInstruction: string; 
   geminiTemperature: number;
   geminiTopP: number;
   geminiTopK: number;
