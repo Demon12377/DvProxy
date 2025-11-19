@@ -1,7 +1,7 @@
 
 import { AppSettings } from './types';
 
-export const DVACH_DOMAINS: string[] = ["https://2ch.hk", "https://2ch.life", "https://2ch.su"];
+export const DVACH_DOMAINS: string[] = ["https://2ch.su", "https://2ch.life", "https://2ch.org"];
 export const DEFAULT_PASSCODE: string = "7Iey09PSeH8R4CtxmMRyAVM79HAkZoUhH3wdZEG3wZVZ6IxpRlIPEi4785B7Vfdf";
 export const DEFAULT_CORS_ANYWHERE_PROXY = "https://cors-anywhere.com/"; // Note: this is a public demo instance.
 
