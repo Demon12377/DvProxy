@@ -11,7 +11,7 @@ export const config = {
 };
 
 const DEFAULT_DVACH_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const DVACH_BASE_URL = 'https://2ch.hk';
+const DVACH_BASE_URL = 'https://2ch.org';
 
 // Environment variables for server-side outbound proxy
 const OUTBOUND_PROXY_URL = process.env.DVACH_OUTBOUND_PROXY_URL;
