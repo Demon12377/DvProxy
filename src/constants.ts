@@ -19,7 +19,17 @@ export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1";
 
 
 export const APP_VERSION = "2.12.0";
-export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
+export const GEMINI_TEXT_MODEL_DEFAULT = "gemini-2.5-flash";
+export const SUPPORTED_GEMINI_TEXT_MODELS = [
+  "gemini-3-pro-preview",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-preview-09-2025",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash-lite-preview-09-2025",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+];
 export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
 export const AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS = 8000;
 
@@ -101,4 +111,5 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   enablePrefilledPostingMode: false,
   prefilledPostMessages: "Message 1\nMessage 2 >>TARGET_POST_NUM",
   prefilledPostTargets: "",
+  geminiTextModel: GEMINI_TEXT_MODEL_DEFAULT,
 };

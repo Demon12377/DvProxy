@@ -16,14 +16,15 @@ import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extra
 import { parseGeminiJsonResponse } from './services/geminiService';
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
-  GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
+  GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
   GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   DVACH_DOMAINS,
   BUMP_KEYWORDS,
   AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
   DEFAULT_APP_SETTINGS,
   PROXY_URL_X2U_KEYED_BASE, // Added for user's custom proxy
-  PROXY_URL_CORS_ANYWHERE_OFFICIAL // Added for user's custom proxy
+  PROXY_URL_CORS_ANYWHERE_OFFICIAL, // Added for user's custom proxy
+  SUPPORTED_GEMINI_TEXT_MODELS,
 } from './constants';
 import { generateUserAgent } from '../utils/userAgentGenerator';
 
@@ -592,7 +593,7 @@ const App: React.FC = () => {
       }
 
       const response = await ai.models.generateContent({
-        model: GEMINI_TEXT_MODEL,
+        model: settings.geminiTextModel,
         contents: [{ role: 'user', parts: geminiMessageParts }],
         config: requestConfig
       }) as CustomGenerateContentResponse; 
@@ -876,7 +877,7 @@ const runBotCycleCallback = useCallback(async () => {
                 };
                 if(autonomousBotDisableThinking) botGenConfig.thinkingConfig={thinkingBudget:0};
 
-                const geminiResponse = await ai.models.generateContent({model:GEMINI_TEXT_MODEL,contents:histForGemini,config:botGenConfig});
+                const geminiResponse = await ai.models.generateContent({model:settings.geminiTextModel,contents:histForGemini,config:botGenConfig});
                 const textToParseForJson = geminiResponse.text;
 
                 if(typeof textToParseForJson === 'string'){
@@ -1341,6 +1342,19 @@ useEffect(() => {
         <div className="mt-3 space-y-3">
             <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Gemini API Key Source:</label><select aria-label="Gemini API Key Source" value={settings.geminiApiKeySource} onChange={e=>handleUpdateSettings({geminiApiKeySource:e.target.value as 'env'|'user'})} className="input-field mt-1"><option value="env">Env API_KEY {currentProcessEnvApiKey?`(Detected: ${currentProcessEnvApiKey.substring(0,4)}...${currentProcessEnvApiKey.substring(currentProcessEnvApiKey.length-4)})`:"(Not Detected)"}</option><option value="user">Manual Input</option></select>{settings.geminiApiKeySource==='user'&&(<input aria-label="User Gemini API Key" type="password" placeholder="Gemini API Key" value={settings.userGeminiApiKey} onChange={e=>handleUpdateSettings({userGeminiApiKey:e.target.value})} autoComplete="new-password" className="input-field mt-1"/>)}</div>
             <div className="p-2 border-t border-gray-200 dark:border-gray-600"><p className="text-sm text-gray-600 dark:text-gray-400">Safety: {settings.geminiSafetySettings.map(s=>`${s.category.replace("HARM_CATEGORY_","")}:${s.threshold.replace("BLOCK_","")}`).join(', ')}. (UI for this WIP)</p></div>
+            <div>
+              <label htmlFor="settingsGeminiModel" className="block text-sm font-medium">Text Model:</label>
+              <select
+                id="settingsGeminiModel"
+                value={settings.geminiTextModel}
+                onChange={e => handleUpdateSettings({geminiTextModel: e.target.value})}
+                className="input-field mt-1 w-full"
+              >
+                {SUPPORTED_GEMINI_TEXT_MODELS.map(model => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            </div>
             <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeOpMedia:e.target.checked})} className="checkbox-field"/>Gemini: Analyze Media in OP Posts (Manual Reply)</label>
             <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeAnonMedia:e.target.checked})} className="checkbox-field"/>Gemini: Analyze Media in Anon Posts (Manual Reply)</label>
             <label className="checkbox-label"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e=>handleUpdateSettings({geminiReplyWithGeneratedImage:e.target.checked})} className="checkbox-field"/>Gemini: Generate image with replies (Manual & Bot)</label>

@@ -79,6 +79,7 @@ export interface AppSettings {
   autoMonitorDvachThreadForGemini: boolean;
   proxyMode: 'cors-anywhere' | 'custom' | 'none'; // New proxy setting
   customProxyUrl: string; // New proxy setting for custom URL
+  geminiTextModel: string;
 }
 
 export interface LogEntry {
