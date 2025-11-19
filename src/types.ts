@@ -236,6 +236,7 @@ export interface AppSettings {
   enablePrefilledPostingMode: boolean;
   prefilledPostMessages: string;
   prefilledPostTargets: string;
+  geminiTextModel: string;
 }
 
 export interface LogEntry {
