@@ -140,7 +140,8 @@ export interface DvachSessionCookies {
 
 export type AutonomousBotReplyMode =
   | 'replies_to_bot'
-  | 'random_in_thread';
+  | 'random_in_thread'
+  | 'bump';
 
 export type AutonomousBotInitialContextScope =
   | 'op_only'
@@ -321,6 +322,7 @@ type ActualFinishReason = SDKFinishReason; // Keep SDK's FinishReason
 
 export interface CustomGenerateContentResponse extends ActualGenerateContentResponse {
   candidates?: (SDKCandidate & { groundingMetadata?: GroundingMetadata; finishReason?: ActualFinishReason | string })[];
+  audio?: { audioBytes: string };
 }
 
 // Cache for OP media to avoid refetching/reprocessing constantly for the bot
@@ -333,7 +335,7 @@ export interface BotOpMediaCache {
 
 export interface ActiveTask {
   id: string;
-  type: 'bot_cycle' | 'gemini_request' | 'dvach_post';
+  type: 'bot_cycle' | 'gemini_request' | 'dvach_post' | 'image_generation' | 'audio_generation';
   description: string;
   startTime: number;
   stop?: () => void; // Optional function to attempt to stop the task

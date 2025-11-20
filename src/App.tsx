@@ -16,7 +16,7 @@ import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extra
 import { parseGeminiJsonResponse } from './services/geminiService';
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
-  GEMINI_IMAGE_MODEL, MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
+  MAX_LOG_ENTRIES, MAX_SENT_MESSAGES_STORED,
   GEMINI_DVACH_CONVERSATIONS_KEY, DVACH_SESSION_COOKIES_KEY,
   DVACH_DOMAINS,
   BUMP_KEYWORDS,
@@ -460,11 +460,11 @@ const App: React.FC = () => {
     try {
       const response = await ai.models.generateContent({
         model: settings.geminiAudioModel,
-        prompt: audioPrompt,
+        contents: [{ role: 'user', parts: [{ text: audioPrompt }] }],
       });
 
-      if (response.audio?.audioBytes) {
-        const base64Audio = `data:audio/mp3;base64,${response.audio.audioBytes}`;
+      if (response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
+        const base64Audio = `data:audio/mp3;base64,${response.candidates[0].content.parts[0].inlineData.data}`;
         setGeneratedAudio(base64Audio);
         addLog('Audio generated successfully.', 'success');
       } else {
@@ -1053,6 +1053,8 @@ const runBotCycleCallback = useCallback(async () => {
             } else { addAutonomousBotActivityLog("No eligible posts found for random reply in this cycle for /"+botBoard+"/"+botThreadId+".", 'bot_activity');}
         } else if (autonomousBotReplyMode === 'replies_to_bot') {
             addAutonomousBotActivityLog("Bot Mode 'replies_to_bot' is a placeholder and not yet fully implemented. Skipping active reply generation.", 'bot_warning');
+        } else if (autonomousBotReplyMode === 'bump') {
+            addAutonomousBotActivityLog("Bot Mode 'bump' is a placeholder and not yet fully implemented. Skipping active reply generation.", 'bot_warning');
         }
         activeConversationForCycle.lastCheckedTimestamp=Date.now();
          setGeminiDvachConversations(prevConvos => {
@@ -1641,7 +1643,7 @@ useEffect(() => {
         <div className="mt-3 space-y-3">
             <div><label htmlFor="botSystemPrompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Системный промпт бота (персона и стиль):</label><textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e=>handleUpdateSettings({autonomousBotSystemPrompt:e.target.value})} rows={4} style={codeEditorStyle} className="mt-1 w-full"/></div>
             <label className="checkbox-label"><input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e=>handleUpdateSettings({botAnalyzesImagesInTriggerPosts:e.target.checked})} className="checkbox-field"/>Бот: Анализировать изображения в триггер-постах</label>
-            <div><label htmlFor="botReplyMode" className="block text-sm text-gray-700 dark:text-gray-300">Режим ответов бота:</label><select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e=>handleUpdateSettings({autonomousBotReplyMode:e.target.value as AutonomousBotReplyMode})} className="input-field mt-1 w-full"><option value="random_in_thread">Случайный пост в треде</option><option value="replies_to_bot">Ответы на посты бота (в разработке)</option></select></div>
+            <div><label htmlFor="botReplyMode" className="block text-sm text-gray-700 dark:text-gray-300">Режим ответов бота:</label><select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e=>handleUpdateSettings({autonomousBotReplyMode:e.target.value as AutonomousBotReplyMode})} className="input-field mt-1 w-full"><option value="random_in_thread">Случайный пост в треде</option><option value="replies_to_bot">Ответы на посты бота (в разработке)</option><option value="bump">Бапм</option></select></div>
             <div><label htmlFor="botInterval" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Интервал циклов бота (секунды):</label><input id="botInterval" type="number" min="10" value={settings.autonomousBotCycleIntervalSeconds} onChange={e=>handleUpdateSettings({autonomousBotCycleIntervalSeconds:parseInt(e.target.value)})} className="input-field mt-1"/></div>
             <div><label htmlFor="botMinPostInterval" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Мин. интервал постов (секунды, для всего бота):</label><input id="botMinPostInterval" type="number" min="10" value={settings.autonomousBotMinPostIntervalSeconds} onChange={e=>handleUpdateSettings({autonomousBotMinPostIntervalSeconds:parseInt(e.target.value)})} className="input-field mt-1"/></div>
             <div className="grid grid-cols-2 gap-4"><div><label htmlFor="botMinReplyDelay" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Мин. задержка ответа (мс):</label><input id="botMinReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMinReplyDelayMs} onChange={e=>handleUpdateSettings({autonomousBotMinReplyDelayMs:parseInt(e.target.value)})} className="input-field mt-1"/></div><div><label htmlFor="botMaxReplyDelay" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Макс. задержка ответа (мс):</label><input id="botMaxReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMaxReplyDelayMs} onChange={e=>handleUpdateSettings({autonomousBotMaxReplyDelayMs:parseInt(e.target.value)})} className="input-field mt-1"/></div></div>

@@ -19,29 +19,21 @@ export const DVACH_SESSION_COOKIES_KEY = "dvach_session_cookies_v1.1";
 
 
 export const APP_VERSION = "2.12.0";
-export const GEMINI_TEXT_MODEL_DEFAULT = "gemini-2.5-flash-preview-09-2025";
+export const GEMINI_TEXT_MODEL_DEFAULT = "gemini-1.5-pro-latest";
 export const SUPPORTED_GEMINI_TEXT_MODELS = [
-  "gemini-3-pro-preview",
-  "gemini-2.5-pro",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-preview-09-2025",
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-flash-lite-preview-09-2025",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
+  "gemini-1.5-pro-latest",
+  "gemini-1.5-flash-latest",
+  "gemini-1.0-pro",
 ];
 export const SUPPORTED_GEMINI_IMAGE_MODELS = [
   "imagen-3.0-generate-002",
-  "gemini-2.5-flash-image",
-  "gemini-2.5-flash-image-preview",
-  "gemini-2.0-flash-preview-image-generation",
+  "gemini-1.5-flash-latest",
 ];
 export const SUPPORTED_GEMINI_AUDIO_MODELS = [
-  "gemini-2.5-pro-preview-tts",
-  "gemini-2.5-flash-preview-tts",
+  "gemini-1.5-pro-latest",
 ];
 export const GEMINI_IMAGE_MODEL_DEFAULT = "imagen-3.0-generate-002";
-export const GEMINI_AUDIO_MODEL_DEFAULT = "gemini-2.5-pro-preview-tts";
+export const GEMINI_AUDIO_MODEL_DEFAULT = "gemini-1.5-pro-latest";
 export const AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS = 8000;
 
 export const THREAD_CACHE_DURATION_MS = 1 * 45 * 1000;
