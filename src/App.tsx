@@ -25,12 +25,14 @@ import {
   PROXY_URL_X2U_KEYED_BASE, // Added for user's custom proxy
   PROXY_URL_CORS_ANYWHERE_OFFICIAL, // Added for user's custom proxy
   SUPPORTED_GEMINI_TEXT_MODELS,
+  SUPPORTED_GEMINI_IMAGE_MODELS,
+  SUPPORTED_GEMINI_AUDIO_MODELS,
 } from './constants';
 import { generateUserAgent } from '../utils/userAgentGenerator';
 
 import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu,
-  IconSparkles, IconAlertTriangle, IconRefresh,
+  IconSparkles, IconAlertTriangle, IconRefresh, IconSearch,
   IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat,
   IconSun, IconMoon,
 } from './components/Icons';
@@ -126,6 +128,17 @@ const App: React.FC = () => {
   const [postUseSage, setPostUseSage] = useState<boolean>(false);
   const [isPosting, setIsPosting] = useState<boolean>(false);
   const [postActivityLog, setPostActivityLog] = useState<string[]>([]);
+  const [threadUrl, setThreadUrl] = useState<string>('');
+
+  const [imagePrompt, setImagePrompt] = useState<string>('');
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState<boolean>(false);
+
+  const [audioPrompt, setAudioPrompt] = useState<string>('');
+  const [generatedAudio, setGeneratedAudio] = useState<string | null>(null);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState<boolean>(false);
+  const [generatedVideo, setGeneratedVideo] = useState<string | null>(null);
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState<boolean>(false);
 
   const [currentFetchedDvachPosts, setCurrentFetchedDvachPosts] = useState<DvachPost[]>([]);
   const [isFetchingThread, setIsFetchingThread] = useState<boolean>(false);
@@ -318,9 +331,9 @@ const App: React.FC = () => {
   }, [settings.board, settings.threadId]);
 
 
-  const handleLoadThread = async (isBotCycle: boolean = false): Promise<DvachPost[] | null> => {
-    const boardToFetch = (isBotCycle ? settings.autonomousBotTargetBoard : currentBoard).trim();
-    const threadToFetch = (isBotCycle ? settings.autonomousBotTargetThreadId : currentThreadId).trim();
+  const handleLoadThread = async (isBotCycle: boolean = false, board?: string, threadId?: string): Promise<DvachPost[] | null> => {
+    const boardToFetch = board || (isBotCycle ? settings.autonomousBotTargetBoard : currentBoard).trim();
+    const threadToFetch = threadId || (isBotCycle ? settings.autonomousBotTargetThreadId : currentThreadId).trim();
 
     if (!boardToFetch || !threadToFetch) {
       if (!isBotCycle) setFetchError('Board and Thread ID are required.');
@@ -385,6 +398,109 @@ const App: React.FC = () => {
   const handleDvachLogout = () => {
     setDvachSessionCookies(null);
     addLog("Logged out from Dvach. Session cookies cleared.", 'info');
+  };
+
+  const handleGenerateImage = async () => {
+    if (!ai) {
+      addLog('Gemini AI not initialized.', 'error');
+      return;
+    }
+    if (!imagePrompt.trim()) {
+      addLog('Image prompt is empty.', 'warning');
+      return;
+    }
+
+    setIsGeneratingImage(true);
+    setGeneratedImage(null);
+    const taskId = addTask('image_generation', `Generating image with prompt: "${imagePrompt.substring(0, 50)}..."`);
+    addLog(`Generating image with prompt: "${imagePrompt}"`, 'gemini');
+
+    try {
+      const response = await ai.models.generateImages({
+        model: settings.geminiImageModel,
+        prompt: imagePrompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: 'image/jpeg',
+        },
+      });
+
+      if (response.generatedImages?.[0]?.image?.imageBytes) {
+        const base64Image = `data:image/jpeg;base64,${response.generatedImages[0].image.imageBytes}`;
+        setGeneratedImage(base64Image);
+        addLog('Image generated successfully.', 'success');
+      } else {
+        throw new Error('No image data returned from API.');
+      }
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      addLog(`Image generation failed: ${errorMsg}`, 'error', error);
+      setFetchError(`Image generation failed: ${errorMsg}`);
+    } finally {
+      setIsGeneratingImage(false);
+      removeTask(taskId);
+    }
+  };
+
+  const handleGenerateAudio = async () => {
+    if (!ai) {
+      addLog('Gemini AI not initialized.', 'error');
+      return;
+    }
+    if (!audioPrompt.trim()) {
+      addLog('Audio prompt is empty.', 'warning');
+      return;
+    }
+
+    setIsGeneratingAudio(true);
+    setGeneratedAudio(null);
+    const taskId = addTask('audio_generation', `Generating audio with prompt: "${audioPrompt.substring(0, 50)}..."`);
+    addLog(`Generating audio with prompt: "${audioPrompt}"`, 'gemini');
+
+    try {
+      const response = await ai.models.generateContent({
+        model: settings.geminiAudioModel,
+        prompt: audioPrompt,
+      });
+
+      if (response.audio?.audioBytes) {
+        const base64Audio = `data:audio/mp3;base64,${response.audio.audioBytes}`;
+        setGeneratedAudio(base64Audio);
+        addLog('Audio generated successfully.', 'success');
+      } else {
+        throw new Error('No audio data returned from API.');
+      }
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      addLog(`Audio generation failed: ${errorMsg}`, 'error', error);
+      setFetchError(`Audio generation failed: ${errorMsg}`);
+    } finally {
+      setIsGeneratingAudio(false);
+      removeTask(taskId);
+    }
+  };
+
+  const handleGenerateVideo = () => {
+    if (!generatedImage || !generatedAudio) {
+      addLog('Image or audio not generated.', 'warning');
+      return;
+    }
+
+    setIsGeneratingVideo(true);
+    const worker = new Worker('ffmpeg-worker.js');
+    worker.postMessage({
+      image: generatedImage,
+      audio: generatedAudio,
+    });
+
+    worker.onmessage = (event) => {
+      const { data } = event.data;
+      const videoBlob = new Blob([data], { type: 'video/mp4' });
+      const videoUrl = URL.createObjectURL(videoBlob);
+      setGeneratedVideo(videoUrl);
+      setIsGeneratingVideo(false);
+      addLog('Video generated successfully.', 'success');
+    };
   };
 
   const commonPostToDvach = useCallback(async (
@@ -639,7 +755,7 @@ const App: React.FC = () => {
         const imagePpt = `Imageboard reply context: "${rawGeminiText.substring(0, 200).trim()}". Style: relevant, meme-like, or abstract.`;
         try {
             const imgGenResp = await ai.models.generateImages({
-              model: GEMINI_IMAGE_MODEL,
+              model: settings.geminiImageModel,
               prompt: imagePpt,
               config: {
                 numberOfImages: 1,
@@ -907,7 +1023,7 @@ const runBotCycleCallback = useCallback(async () => {
 
                         let fileToPostForBot:File|null=null;
                         if(botGeminiReplyWithGeneratedImage){
-                             try{const imgPromptForBot=`Image context: "${rawReplyContent.substring(0,150)}"`;const igr=await ai.models.generateImages({model:GEMINI_IMAGE_MODEL,prompt:imgPromptForBot,config:{numberOfImages:1,outputMimeType:'image/jpeg'}});if(igr.generatedImages?.[0]?.image?.imageBytes)fileToPostForBot=await base64ToFile(igr.generatedImages[0].image.imageBytes,`bot_img_${Date.now()}.jpg`,igr.generatedImages[0].image.mimeType||'image/jpeg');}catch(eImg){addLog(`Bot image gen error: ${(eImg as Error).message}`,'bot_warning');}
+                             try{const imgPromptForBot=`Image context: "${rawReplyContent.substring(0,150)}"`;const igr=await ai.models.generateImages({model:settings.geminiImageModel,prompt:imgPromptForBot,config:{numberOfImages:1,outputMimeType:'image/jpeg'}});if(igr.generatedImages?.[0]?.image?.imageBytes)fileToPostForBot=await base64ToFile(igr.generatedImages[0].image.imageBytes,`bot_img_${Date.now()}.jpg`,igr.generatedImages[0].image.mimeType||'image/jpeg');}catch(eImg){addLog(`Bot image gen error: ${(eImg as Error).message}`,'bot_warning');}
                         }
                         try {
                             const newPostNumByBot = await commonPostToDvach(finalCommentToPost, fileToPostForBot, false, botBoard, botThreadId, userAgent, dvachSessionCookies, targetPost.num);
@@ -1098,6 +1214,40 @@ useEffect(() => {
     wordBreak: 'break-all',
   };
 
+  const handleAnalyzeThreadFromUrl = async () => {
+    addLog(`Analyzing thread from URL: ${threadUrl}`, 'info');
+    if (!threadUrl.trim()) {
+        addLog("URL is empty.", 'warning');
+        return;
+    }
+
+    try {
+        const url = new URL(threadUrl);
+        const pathParts = url.pathname.split('/').filter(part => part.length > 0);
+
+        if (pathParts.length >= 3 && pathParts[1] === 'res') {
+            const board = pathParts[0];
+            const threadId = pathParts[2].split('.')[0];
+
+            if (board && threadId && /^\d+$/.test(threadId)) {
+                addLog(`Parsed from URL: Board='${board}', Thread ID='${threadId}'`, 'info');
+                setCurrentBoard(board);
+                setCurrentThreadId(threadId);
+                handleUpdateSettings({ board: board, threadId: threadId });
+                await handleLoadThread(false, board, threadId);
+                setThreadUrl('');
+            } else {
+                throw new Error("Could not extract a valid board and numeric thread ID.");
+            }
+        } else {
+            throw new Error("URL path does not match expected format (.../board/res/thread.html).");
+        }
+    } catch (error) {
+        const errorMessage = (error as Error).message;
+        addLog(`Failed to parse or analyze thread from URL: ${errorMessage}`, 'error', error);
+        setFetchError(`Invalid URL format: ${errorMessage}`);
+    }
+  };
 
   // --- RENDER FUNCTIONS ---
   const renderDvachPostCard = (post: DvachPost, index: number) => {
@@ -1151,30 +1301,118 @@ useEffect(() => {
 
   const renderDvachBotPanel = () => (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
-      <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400 border-b pb-2 border-gray-300 dark:border-gray-700">Dvach Manual Operations</h2>
+      <h2 className="text-2xl font-semibold text-blue-600 dark:text-blue-400 border-b pb-2 border-gray-300 dark:border-gray-700">Ручные операции</h2>
+
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
-        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Dvach Authentication</h3>
-        {dvachSessionCookies?.passcode_auth ? (
-            <div className="flex items-center space-x-3"> <IconUserCircle className="h-6 w-6 text-green-500" /> <span className="text-sm text-green-700 dark:text-green-300">Logged in to Dvach.</span> <button onClick={handleDvachLogout} className="btn-danger px-3 py-1 text-xs flex items-center"><IconLogout className="mr-1 h-4 w-4"/> Logout</button> </div>
-        ) : (
-            <div className="flex items-center space-x-3"> <IconAlertTriangle className="h-6 w-6 text-yellow-500" /> <span className="text-sm text-yellow-700 dark:text-yellow-300">Not logged in.</span> <button onClick={handleDvachLogin} disabled={isDvachLoggingIn || !settings.purchasedPasscode} className="btn-primary px-3 py-1 text-xs flex items-center">{isDvachLoggingIn ? <IconRefresh className="mr-1 h-4 w-4 animate-spin"/> : <IconLogin className="mr-1 h-4 w-4"/>}{isDvachLoggingIn ? 'Logging in...' : 'Login'}</button> </div>
+        <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Анализ треда по URL</h3>
+        <div className="flex items-center space-x-2">
+          <input
+            type="text"
+            placeholder="Введите URL треда (.html или .json)"
+            value={threadUrl}
+            onChange={(e) => setThreadUrl(e.target.value)}
+            className="input-field w-full"
+          />
+          <button
+            onClick={() => handleAnalyzeThreadFromUrl()}
+            disabled={!threadUrl.trim()}
+            className="btn-primary flex items-center"
+          >
+            <IconSearch className="mr-2 h-5 w-5"/> Анализировать
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
+        <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Генерация изображений</h3>
+        <div className="flex items-center space-x-2">
+          <input
+            type="text"
+            placeholder="Введите промпт для генерации изображения"
+            value={imagePrompt}
+            onChange={(e) => setImagePrompt(e.target.value)}
+            className="input-field w-full"
+          />
+          <button
+            onClick={handleGenerateImage}
+            disabled={isGeneratingImage || !imagePrompt.trim()}
+            className="btn-primary flex items-center"
+          >
+            {isGeneratingImage ? <IconRefresh className="mr-2 h-5 w-5 animate-spin"/> : <IconSparkles className="mr-2 h-5 w-5"/>}
+            {isGeneratingImage ? 'Генерация...' : 'Генерировать'}
+          </button>
+        </div>
+        {generatedImage && (
+          <div className="mt-4">
+            <img src={generatedImage} alt="Generated" className="rounded-lg shadow-md" />
+          </div>
         )}
-        {!settings.purchasedPasscode && !dvachSessionCookies?.passcode_auth && <p className="text-xs text-red-500 mt-1">Passcode not set in Settings.</p>}
+      </div>
+
+      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
+        <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Генерация аудио</h3>
+        <div className="flex items-center space-x-2">
+          <input
+            type="text"
+            placeholder="Введите текст для генерации аудио"
+            value={audioPrompt}
+            onChange={(e) => setAudioPrompt(e.target.value)}
+            className="input-field w-full"
+          />
+          <button
+            onClick={handleGenerateAudio}
+            disabled={isGeneratingAudio || !audioPrompt.trim()}
+            className="btn-primary flex items-center"
+          >
+            {isGeneratingAudio ? <IconRefresh className="mr-2 h-5 w-5 animate-spin"/> : <IconSparkles className="mr-2 h-5 w-5"/>}
+            {isGeneratingAudio ? 'Генерация...' : 'Генерировать'}
+          </button>
+        </div>
+        {generatedAudio && (
+          <div className="mt-4">
+            <audio controls src={generatedAudio} className="w-full" />
+          </div>
+        )}
+        <div className="mt-4">
+          <button
+            onClick={handleGenerateVideo}
+            disabled={isGeneratingVideo || !generatedImage || !generatedAudio}
+            className="btn-primary flex items-center"
+          >
+            {isGeneratingVideo ? <IconRefresh className="mr-2 h-5 w-5 animate-spin"/> : <IconSparkles className="mr-2 h-5 w-5"/>}
+            {isGeneratingVideo ? 'Генерация видео...' : 'Сгенерировать видео'}
+          </button>
+        </div>
+        {generatedVideo && (
+          <div className="mt-4">
+            <video controls src={generatedVideo} className="w-full rounded-lg shadow-md" />
+          </div>
+        )}
+      </div>
+
+      <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
+        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Аутентификация</h3>
+        {dvachSessionCookies?.passcode_auth ? (
+            <div className="flex items-center space-x-3"> <IconUserCircle className="h-6 w-6 text-green-500" /> <span className="text-sm text-green-700 dark:text-green-300">Вы вошли в систему.</span> <button onClick={handleDvachLogout} className="btn-danger px-3 py-1 text-xs flex items-center"><IconLogout className="mr-1 h-4 w-4"/> Выйти</button> </div>
+        ) : (
+            <div className="flex items-center space-x-3"> <IconAlertTriangle className="h-6 w-6 text-yellow-500" /> <span className="text-sm text-yellow-700 dark:text-yellow-300">Вы не вошли в систему.</span> <button onClick={handleDvachLogin} disabled={isDvachLoggingIn || !settings.purchasedPasscode} className="btn-primary px-3 py-1 text-xs flex items-center">{isDvachLoggingIn ? <IconRefresh className="mr-1 h-4 w-4 animate-spin"/> : <IconLogin className="mr-1 h-4 w-4"/>}{isDvachLoggingIn ? 'Вход...' : 'Войти'}</button> </div>
+        )}
+        {!settings.purchasedPasscode && !dvachSessionCookies?.passcode_auth && <p className="text-xs text-red-500 mt-1">Пасскод не установлен в настройках.</p>}
          {fetchError && (fetchError.includes("Login failed") || fetchError.includes("Dvach login error") || fetchError.includes("session cookie")) && <p className="text-xs text-red-500 mt-1">{fetchError}</p>}
       </div>
 
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
-        <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Manual Post</h3>
+        <h3 className="text-xl font-medium mb-3 text-gray-700 dark:text-gray-300">Ручной постинг</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
-            <div><label htmlFor="manualBoard" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Board:</label><input id="manualBoard" type="text" value={currentBoard} onChange={e => setCurrentBoard(e.target.value)} className="input-field"/></div>
-            <div><label htmlFor="manualThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Thread ID (0 for new):</label><input id="manualThreadId" type="text" value={currentThreadId} onChange={e => setCurrentThreadId(e.target.value)} className="input-field"/></div>
+            <div><label htmlFor="manualBoard" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Доска:</label><input id="manualBoard" type="text" value={currentBoard} onChange={e => setCurrentBoard(e.target.value)} className="input-field"/></div>
+            <div><label htmlFor="manualThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Тред (0 для нового):</label><input id="manualThreadId" type="text" value={currentThreadId} onChange={e => setCurrentThreadId(e.target.value)} className="input-field"/></div>
         </div>
-        <textarea aria-label="Post comment" className="input-field w-full" rows={3} placeholder="Comment..." value={postText} onChange={(e) => setPostText(e.target.value)}/>
+        <textarea aria-label="Post comment" className="input-field w-full" rows={3} placeholder="Комментарий..." value={postText} onChange={(e) => setPostText(e.target.value)}/>
         <div className="flex items-center space-x-4 mt-2">
-          <label className="text-sm text-gray-700 dark:text-gray-300">Attach Image:<input type="file" onChange={(e) => setPostFile(e.target.files?.[0] || null)} className="input-file ml-2"/>{postFile && <span className="text-xs ml-2">{postFile.name} (<button onClick={() => setPostFile(null)} className="text-red-500 hover:underline">x</button>)</span>}</label>
+          <label className="text-sm text-gray-700 dark:text-gray-300">Прикрепить изображение:<input type="file" onChange={(e) => setPostFile(e.target.files?.[0] || null)} className="input-file ml-2"/>{postFile && <span className="text-xs ml-2">{postFile.name} (<button onClick={() => setPostFile(null)} className="text-red-500 hover:underline">x</button>)</span>}</label>
           <label className="checkbox-label"><input type="checkbox" checked={postUseSage} onChange={(e) => setPostUseSage(e.target.checked)} className="checkbox-field"/>Sage</label>
-          <button onClick={handleSimplePost} disabled={isPosting || !dvachSessionCookies?.passcode_auth || !currentBoard.trim() || !postText.trim()} className="btn-primary flex items-center" title={!dvachSessionCookies?.passcode_auth ? "Login to post" : (!currentBoard.trim() || !postText.trim()) ? "Board/comment required" : "Post"}>
-            {isPosting ? <IconRefresh className="mr-2 h-5 w-5 animate-spin"/> : <IconSend className="mr-2 h-5 w-5"/>}{isPosting ? 'Posting...' : 'Post'}
+          <button onClick={handleSimplePost} disabled={isPosting || !dvachSessionCookies?.passcode_auth || !currentBoard.trim() || !postText.trim()} className="btn-primary flex items-center" title={!dvachSessionCookies?.passcode_auth ? "Войдите, чтобы постить" : (!currentBoard.trim() || !postText.trim()) ? "Требуется доска/комментарий" : "Отправить"}>
+            {isPosting ? <IconRefresh className="mr-2 h-5 w-5 animate-spin"/> : <IconSend className="mr-2 h-5 w-5"/>}{isPosting ? 'Отправка...' : 'Отправить'}
           </button>
         </div>
         {postActivityLog.length > 0 && <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">{postActivityLog.map((log,i) => <p key={i} className="truncate">{log}</p>)}</div>}
@@ -1183,17 +1421,17 @@ useEffect(() => {
 
       <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-md">
         <div className="flex justify-between items-center mb-3">
-            <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Thread Viewer & Gemini Reply</h3>
-            <button onClick={() => handleLoadThread(false)} disabled={isFetchingThread || !currentBoard.trim() || !currentThreadId.trim()} className="btn-secondary flex items-center" title={(!currentBoard.trim() || !currentThreadId.trim()) ? "Enter Board/Thread ID" : "Fetch posts"}>
-                <IconRefresh className={`mr-2 h-5 w-5 ${isFetchingThread ? 'animate-spin' : ''}`}/> Fetch Thread
+            <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">Просмотр треда и ответ с Gemini</h3>
+            <button onClick={() => handleLoadThread(false)} disabled={isFetchingThread || !currentBoard.trim() || !currentThreadId.trim()} className="btn-secondary flex items-center" title={(!currentBoard.trim() || !currentThreadId.trim()) ? "Введите доску/тред" : "Загрузить посты"}>
+                <IconRefresh className={`mr-2 h-5 w-5 ${isFetchingThread ? 'animate-spin' : ''}`}/> Загрузить тред
             </button>
         </div>
-        {(!currentBoard.trim() || !currentThreadId.trim()) && <p className="text-sm text-yellow-600 dark:text-yellow-400">Enter Board and Thread ID to view posts.</p>}
-        {fetchError && !fetchError.includes("Login failed") && !fetchError.includes("Failed to post") && <p className="text-sm text-red-600 dark:text-red-400">Error: {fetchError}</p>}
+        {(!currentBoard.trim() || !currentThreadId.trim()) && <p className="text-sm text-yellow-600 dark:text-yellow-400">Введите доску и ID треда для просмотра постов.</p>}
+        {fetchError && !fetchError.includes("Login failed") && !fetchError.includes("Failed to post") && <p className="text-sm text-red-600 dark:text-red-400">Ошибка: {fetchError}</p>}
         <div ref={threadPostsContainerRef} className="max-h-[600px] overflow-y-auto bg-gray-100 dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
-            {isFetchingThread && <p className="text-center p-4">Loading thread...</p>}
-            {!isFetchingThread && currentFetchedDvachPosts.length === 0 && (!currentBoard.trim() || !currentThreadId.trim() || fetchError) && <p className="text-center p-4 text-gray-500 dark:text-gray-400">No posts. Enter Board/Thread ID & Fetch.</p>}
-            {!isFetchingThread && currentFetchedDvachPosts.length === 0 && currentBoard.trim() && currentThreadId.trim() && !fetchError && <p className="text-center p-4 text-gray-500 dark:text-gray-400">Thread empty or error (check logs).</p>}
+            {isFetchingThread && <p className="text-center p-4">Загрузка треда...</p>}
+            {!isFetchingThread && currentFetchedDvachPosts.length === 0 && (!currentBoard.trim() || !currentThreadId.trim() || fetchError) && <p className="text-center p-4 text-gray-500 dark:text-gray-400">Нет постов. Введите доску/ID треда и загрузите.</p>}
+            {!isFetchingThread && currentFetchedDvachPosts.length === 0 && currentBoard.trim() && currentThreadId.trim() && !fetchError && <p className="text-center p-4 text-gray-500 dark:text-gray-400">Тред пуст или произошла ошибка (см. логи).</p>}
             {currentFetchedDvachPosts.map(renderDvachPostCard)}
         </div>
       </div>
@@ -1203,36 +1441,36 @@ useEffect(() => {
   const renderAutonomousBotControlPanel = () => (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <div className="flex justify-between items-center border-b pb-2 border-gray-300 dark:border-gray-700">
-        <h2 className="text-2xl font-semibold text-purple-600 dark:text-purple-400">Autonomous Gemini Bot Control</h2>
+        <h2 className="text-2xl font-semibold text-purple-600 dark:text-purple-400">Управление автономным ботом Gemini</h2>
         <div className="flex items-center space-x-2">
-            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${autonomousBotActive ? 'bg-green-200 text-green-800 dark:bg-green-700 dark:text-green-100' : 'bg-red-200 text-red-800 dark:bg-red-700 dark:text-red-100'}`}>{autonomousBotActive ? 'Active' : 'Inactive'}</span>
-            <button onClick={() => setAutonomousBotActive(prev => !prev)} disabled={!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()} className={`btn ${autonomousBotActive ? 'btn-danger' : 'btn-success'} flex items-center`} title={!ai?"Gemini not init":!dvachSessionCookies?.passcode_auth?"Not logged in":(!settings.autonomousBotTargetBoard.trim()||!settings.autonomousBotTargetThreadId.trim())?"Bot target not set":autonomousBotActive?"Stop Bot":"Start Bot"}>
+            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${autonomousBotActive ? 'bg-green-200 text-green-800 dark:bg-green-700 dark:text-green-100' : 'bg-red-200 text-red-800 dark:bg-red-700 dark:text-red-100'}`}>{autonomousBotActive ? 'Активен' : 'Неактивен'}</span>
+            <button onClick={() => setAutonomousBotActive(prev => !prev)} disabled={!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()} className={`btn ${autonomousBotActive ? 'btn-danger' : 'btn-success'} flex items-center`} title={!ai?"Gemini не инициализирован":!dvachSessionCookies?.passcode_auth?"Не выполнен вход":(!settings.autonomousBotTargetBoard.trim()||!settings.autonomousBotTargetThreadId.trim())?"Цель бота не установлена":autonomousBotActive?"Остановить бота":"Запустить бота"}>
                 {autonomousBotActive ? <IconPlayerStop className="mr-2 h-5 w-5"/> : <IconPlayerPlay className="mr-2 h-5 w-5"/>}
-                {autonomousBotActive ? 'Stop Bot' : 'Start Bot'}
+                {autonomousBotActive ? 'Остановить' : 'Запустить'}
             </button>
         </div>
       </div>
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700 space-y-3">
-        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Bot Target Configuration</h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400">Also available in Settings tab.</p>
-        <div><label htmlFor="botPanelTargetBoard" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bot Target Board:</label><input id="botPanelTargetBoard" type="text" value={settings.autonomousBotTargetBoard} onChange={e => handleUpdateSettings({ autonomousBotTargetBoard: e.target.value })} className="input-field mt-1"/></div>
-        <div><label htmlFor="botPanelTargetThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bot Target Thread ID:</label><input id="botPanelTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({ autonomousBotTargetThreadId: e.target.value })} className="input-field mt-1"/></div>
+        <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">Настройки цели бота</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Также доступно во вкладке "Настройки".</p>
+        <div><label htmlFor="botPanelTargetBoard" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Целевая доска:</label><input id="botPanelTargetBoard" type="text" value={settings.autonomousBotTargetBoard} onChange={e => handleUpdateSettings({ autonomousBotTargetBoard: e.target.value })} className="input-field mt-1"/></div>
+        <div><label htmlFor="botPanelTargetThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">ID целевого треда:</label><input id="botPanelTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({ autonomousBotTargetThreadId: e.target.value })} className="input-field mt-1"/></div>
       </div>
-       {(!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) && <div className="alert-warning"><p className="font-semibold">Bot cannot start:</p><ul className="list-disc list-inside ml-4 text-xs">{!ai && <li>Gemini AI not initialized.</li>}{!dvachSessionCookies?.passcode_auth && <li>Not logged into Dvach.</li>}{(!settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) && <li>Bot target board/thread not set.</li>}</ul></div>}
+       {(!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) && <div className="alert-warning"><p className="font-semibold">Бот не может запуститься:</p><ul className="list-disc list-inside ml-4 text-xs">{!ai && <li>Gemini AI не инициализирован.</li>}{!dvachSessionCookies?.passcode_auth && <li>Не выполнен вход в Двач.</li>}{(!settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) && <li>Не указана целевая доска/тред для бота.</li>}</ul></div>}
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
-        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Bot Status & Activity</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Status: <span className="font-semibold">{autonomousBotStatus}</span></p>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Target: <span className="font-semibold">{currentDvachBaseUrl}/{settings.autonomousBotTargetBoard.trim()||"[NS]"}/{settings.autonomousBotTargetThreadId.trim()||"[NS]"}</span> | Mode: <span className="font-semibold">{settings.autonomousBotReplyMode.replace(/_/g,' ')}</span> | Interval: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}s</span> | Min Post Interval: <span className="font-semibold">{settings.autonomousBotMinPostIntervalSeconds}s</span></p>
-        {activeTasks.filter(t=>t.type==='bot_cycle').length > 0 && <p className="text-xs text-green-600 dark:text-green-400">Active Bot Task ID: {activeTasks.find(t=>t.type==='bot_cycle')?.id}</p>}
-        <div className="max-h-60 overflow-y-auto bg-gray-50 dark:bg-gray-900 p-2 rounded border border-gray-200 dark:border-gray-700">{autonomousBotActivityLog.length===0 && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">No bot activity.</p>}{autonomousBotActivityLog.map((log,idx) => (<p key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-0.5 font-mono">{log}</p>))}</div>
+        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Статус и активность бота</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Статус: <span className="font-semibold">{autonomousBotStatus}</span></p>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Цель: <span className="font-semibold">{currentDvachBaseUrl}/{settings.autonomousBotTargetBoard.trim()||"[NS]"}/{settings.autonomousBotTargetThreadId.trim()||"[NS]"}</span> | Режим: <span className="font-semibold">{settings.autonomousBotReplyMode.replace(/_/g,' ')}</span> | Интервал: <span className="font-semibold">{settings.autonomousBotCycleIntervalSeconds}с</span> | Мин. интервал постов: <span className="font-semibold">{settings.autonomousBotMinPostIntervalSeconds}с</span></p>
+        {activeTasks.filter(t=>t.type==='bot_cycle').length > 0 && <p className="text-xs text-green-600 dark:text-green-400">ID активной задачи бота: {activeTasks.find(t=>t.type==='bot_cycle')?.id}</p>}
+        <div className="max-h-60 overflow-y-auto bg-gray-50 dark:bg-gray-900 p-2 rounded border border-gray-200 dark:border-gray-700">{autonomousBotActivityLog.length===0 && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">Нет активности бота.</p>}{autonomousBotActivityLog.map((log,idx) => (<p key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-0.5 font-mono">{log}</p>))}</div>
       </div>
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
-        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Active Gemini-Dvach Conversations (Bot)</h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Bot conversation contexts. Click ID for details in Logs.</p>
+        <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Активные диалоги Gemini-Двач (Бот)</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Контексты диалогов бота. Нажмите на ID для просмотра деталей в логах.</p>
         <div className="max-h-[500px] overflow-y-auto space-y-2">
-            {geminiDvachConversations.size===0?(<p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No bot contexts.</p>):(Array.from(geminiDvachConversations.values()).sort((a,b)=>(b?.lastCheckedTimestamp||0)-(a?.lastCheckedTimestamp||0)).map(c=>(c&&c.id?(<details key={c.id} className="p-2.5 mb-2 border rounded-lg bg-gray-50 dark:bg-gray-700/60 border-gray-200 dark:border-gray-600 text-xs shadow-sm hover:shadow-md transition-shadow"><summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-300 select-none">ID: <button onClick={()=>addLog("Bot Conv Details:",'info',c)} className="text-indigo-500 hover:underline truncate" title="Details in Logs">{c.id}</button><span className="ml-2 text-gray-500 dark:text-gray-400">(Sts:{c.status}|LastReply:&gt;&gt;{c.lastBotReplyNum||'N/A'}|Hist:{c.history?.length||0})</span></summary><div className="mt-2 space-y-1.5 pl-2 border-l-2 border-gray-300 dark:border-gray-500"><p><strong>Trigger/Seed:</strong><span className="font-semibold">&gt;&gt;{c.triggerPostNum}</span> on <span className="font-semibold">/{c.board}/{c.threadId}</span> {c.isBotSeedConversation?"(Bot Seed)":""}</p><p><strong>Last Checked:</strong>{new Date(c.lastCheckedTimestamp).toLocaleTimeString()}</p>{c.initialContext&&(<details className="mt-1 text-xs"><summary className="cursor-pointer text-gray-600 dark:text-gray-400 italic">Initial Context...</summary><div className="pl-3 pt-1 space-y-0.5">{c.initialContext.opPostText&&<p><strong>Initial Thread Ctx:</strong>"{c.initialContext.opPostText.substring(0,200)}..."</p>}{c.initialContext.opPostMediaParts&&c.initialContext.opPostMediaParts.length>0&&<p><strong>OP Media:</strong>{c.initialContext.opPostMediaParts.length} item(s).</p>}</div></details>)}{c.history&&c.history.length>0&&(<details className="mt-1 text-xs"><summary className="cursor-pointer text-gray-600 dark:text-gray-400 italic">Last {Math.min(5,c.history.length)} messages...</summary><div className="pl-3 pt-1 space-y-0.5 max-h-32 overflow-y-auto">{c.history.slice(-5).map((m,i)=>(<p key={i} className="truncate"><strong className="capitalize">{m.role}:</strong>{(m.parts[0]?.text||'[Non-text/Media]').substring(0,100)}...</p>))}</div></details>)}</div></details>):null)))}
+            {geminiDvachConversations.size===0?(<p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">Нет контекстов бота.</p>):(Array.from(geminiDvachConversations.values()).sort((a,b)=>(b?.lastCheckedTimestamp||0)-(a?.lastCheckedTimestamp||0)).map(c=>(c&&c.id?(<details key={c.id} className="p-2.5 mb-2 border rounded-lg bg-gray-50 dark:bg-gray-700/60 border-gray-200 dark:border-gray-600 text-xs shadow-sm hover:shadow-md transition-shadow"><summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-300 select-none">ID: <button onClick={()=>addLog("Детали диалога:",'info',c)} className="text-indigo-500 hover:underline truncate" title="Детали в логах">{c.id}</button><span className="ml-2 text-gray-500 dark:text-gray-400">(Статус:{c.status}|Последний ответ:&gt;&gt;{c.lastBotReplyNum||'N/A'}|История:{c.history?.length||0})</span></summary><div className="mt-2 space-y-1.5 pl-2 border-l-2 border-gray-300 dark:border-gray-500"><p><strong>Триггер/Начало:</strong><span className="font-semibold">&gt;&gt;{c.triggerPostNum}</span> на <span className="font-semibold">/{c.board}/{c.threadId}</span> {c.isBotSeedConversation?"(Начало бота)":""}</p><p><strong>Последняя проверка:</strong>{new Date(c.lastCheckedTimestamp).toLocaleTimeString()}</p>{c.initialContext&&(<details className="mt-1 text-xs"><summary className="cursor-pointer text-gray-600 dark:text-gray-400 italic">Начальный контекст...</summary><div className="pl-3 pt-1 space-y-0.5">{c.initialContext.opPostText&&<p><strong>Начальный контекст треда:</strong>"{c.initialContext.opPostText.substring(0,200)}..."</p>}{c.initialContext.opPostMediaParts&&c.initialContext.opPostMediaParts.length>0&&<p><strong>Медиа ОП-поста:</strong>{c.initialContext.opPostMediaParts.length} элемент(ов).</p>}</div></details>)}{c.history&&c.history.length>0&&(<details className="mt-1 text-xs"><summary className="cursor-pointer text-gray-600 dark:text-gray-400 italic">Последние {Math.min(5,c.history.length)} сообщений...</summary><div className="pl-3 pt-1 space-y-0.5 max-h-32 overflow-y-auto">{c.history.slice(-5).map((m,i)=>(<p key={i} className="truncate"><strong className="capitalize">{m.role}:</strong>{(m.parts[0]?.text||'[Нетекст/Медиа]').substring(0,100)}...</p>))}</div></details>)}</div></details>):null)))}
         </div>
-        <button onClick={()=>{setGeminiDvachConversations(new Map());addLog("Cleared all Bot Conversation Contexts.","bot_warning");}} className="mt-4 btn-danger flex items-center text-xs" disabled={geminiDvachConversations.size===0}><IconTrash className="mr-1.5 h-4 w-4"/>Clear Contexts</button>
+        <button onClick={()=>{setGeminiDvachConversations(new Map());addLog("Все контексты диалогов бота очищены.","bot_warning");}} className="mt-4 btn-danger flex items-center text-xs" disabled={geminiDvachConversations.size===0}><IconTrash className="mr-1.5 h-4 w-4"/>Очистить контексты</button>
       </div>
     </div>
   );
@@ -1266,22 +1504,22 @@ useEffect(() => {
     const currentProcessEnvApiKey = process.env.API_KEY;
     return (
      <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
-      <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Application Settings</h2>
+      <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700">Настройки приложения</h2>
       <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
-        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Global Dvach Settings</summary>
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Общие настройки Двача</summary>
         <div className="mt-3 space-y-3">
-            <div><label htmlFor="settingsBoard" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Default Board (Manual Ops):</label><input id="settingsBoard" type="text" value={settings.board} onChange={e=>handleUpdateSettings({board:e.target.value})} className="input-field mt-1"/></div>
-            <div><label htmlFor="settingsThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Default Thread ID (Manual Ops):</label><input id="settingsThreadId" type="text" value={settings.threadId} onChange={e=>handleUpdateSettings({threadId:e.target.value})} className="input-field mt-1"/></div>
+            <div><label htmlFor="settingsBoard" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Доска по умолчанию (ручные операции):</label><input id="settingsBoard" type="text" value={settings.board} onChange={e=>handleUpdateSettings({board:e.target.value})} className="input-field mt-1"/></div>
+            <div><label htmlFor="settingsThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">ID треда по умолчанию (ручные операции):</label><input id="settingsThreadId" type="text" value={settings.threadId} onChange={e=>handleUpdateSettings({threadId:e.target.value})} className="input-field mt-1"/></div>
             <div>
-              <label htmlFor="settingsDomainUsageMode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Dvach Base Domain (for client-side URLs):</label>
+              <label htmlFor="settingsDomainUsageMode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Базовый домен Двача (для URL на клиенте):</label>
               <select id="settingsDomainUsageMode" value={settings.dvachDomainUsageMode} onChange={e => handleUpdateSettings({ dvachDomainUsageMode: e.target.value as 'predefined' | 'custom' })} className="input-field mt-1">
-                <option value="predefined">Use Predefined Domain</option>
-                <option value="custom">Use Custom Domain</option>
+                <option value="predefined">Использовать предустановленный домен</option>
+                <option value="custom">Использовать свой домен</option>
               </select>
             </div>
             {settings.dvachDomainUsageMode === 'predefined' && (
               <div>
-                <label htmlFor="settingsDvachBaseDomainIndex" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Predefined Domain:</label>
+                <label htmlFor="settingsDvachBaseDomainIndex" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Предустановленный домен:</label>
                 <select id="settingsDvachBaseDomainIndex" value={settings.dvachBaseDomainIndex} onChange={e => handleUpdateSettings({ dvachBaseDomainIndex: parseInt(e.target.value) })} className="input-field mt-1">
                   {DVACH_DOMAINS.map((domain, index) => (
                     <option key={index} value={index}>{domain}</option>
@@ -1291,59 +1529,59 @@ useEffect(() => {
             )}
             {settings.dvachDomainUsageMode === 'custom' && (
               <div>
-                <label htmlFor="settingsCustomDvachDomain" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Custom Dvach Domain URL:</label>
-                <input id="settingsCustomDvachDomain" type="url" placeholder="e.g., https://2ch.life" value={settings.customDvachDomain} onChange={e => handleUpdateSettings({ customDvachDomain: e.target.value })} className="input-field mt-1" />
-                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Ensure it's a valid base URL (e.g., https://custom.domain). No trailing slash needed.</p>
+                <label htmlFor="settingsCustomDvachDomain" className="block text-sm font-medium text-gray-700 dark:text-gray-300">URL своего домена Двача:</label>
+                <input id="settingsCustomDvachDomain" type="url" placeholder="например, https://2ch.life" value={settings.customDvachDomain} onChange={e => handleUpdateSettings({ customDvachDomain: e.target.value })} className="input-field mt-1" />
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Убедитесь, что это валидный базовый URL (например, https://custom.domain). Косая черта в конце не нужна.</p>
               </div>
             )}
-             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Current effective base domain: <strong className="text-indigo-500">{currentDvachBaseUrl}</strong>. Note: Serverless functions for posting/login still target 2ch.hk.</p>
-            <div><label htmlFor="settingsPasscode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Purchased Passcode:</label><input id="settingsPasscode" type="password" value={settings.purchasedPasscode} onChange={e=>handleUpdateSettings({purchasedPasscode:e.target.value})} autoComplete="new-password" placeholder="Your Dvach Passcode" className="input-field mt-1"/></div>
-            <div><label htmlFor="settingsUserAgent" className="block text-sm font-medium text-gray-700 dark:text-gray-300">User Agent:</label><input id="settingsUserAgent" type="text" value={settings.userAgent} onChange={e=>handleUpdateSettings({userAgent:e.target.value})} className="input-field mt-1"/><button onClick={()=>handleUpdateSettings({userAgent:generateUserAgent()})} className="btn-secondary text-xs mt-1">Generate New</button></div>
-             <div className="mt-2"><label className="block text-sm font-medium text-gray-400 dark:text-gray-500">(Debug) File Upload:</label><input type="file" onChange={(e)=>handleFileUpload(e)} className="input-file-sm"/></div>
+             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Текущий используемый домен: <strong className="text-indigo-500">{currentDvachBaseUrl}</strong>. Примечание: серверные функции для постинга/входа все равно используют 2ch.hk.</p>
+            <div><label htmlFor="settingsPasscode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Купленный пасскод:</label><input id="settingsPasscode" type="password" value={settings.purchasedPasscode} onChange={e=>handleUpdateSettings({purchasedPasscode:e.target.value})} autoComplete="new-password" placeholder="Ваш пасскод Двача" className="input-field mt-1"/></div>
+            <div><label htmlFor="settingsUserAgent" className="block text-sm font-medium text-gray-700 dark:text-gray-300">User Agent:</label><input id="settingsUserAgent" type="text" value={settings.userAgent} onChange={e=>handleUpdateSettings({userAgent:e.target.value})} className="input-field mt-1"/><button onClick={()=>handleUpdateSettings({userAgent:generateUserAgent()})} className="btn-secondary text-xs mt-1">Сгенерировать новый</button></div>
+             <div className="mt-2"><label className="block text-sm font-medium text-gray-400 dark:text-gray-500">(Отладка) Загрузка файла:</label><input type="file" onChange={(e)=>handleFileUpload(e)} className="input-file-sm"/></div>
         </div>
       </details>
       <details className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
-        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">CORS Proxy (Client GETs)</summary>
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">CORS прокси (GET-запросы клиента)</summary>
         <div className="mt-3 space-y-3">
-            <p className="text-xs text-gray-500 dark:text-gray-400">For client-side GET requests (e.g., images, or thread data if not serverless). Dvach POSTs use serverless functions.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Для GET-запросов на стороне клиента (например, изображений или данных треда, если не используется serverless). POST-запросы на Двач используют серверные функции.</p>
             <div>
-                <label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Thread Data:</label>
+                <label htmlFor="settingsProxyModeForGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Прокси для данных треда:</label>
                 <select id="settingsProxyModeForGET" value={settings.proxyModeForGET === 'custom_general_param' && settings.customProxyUrlForGET === PROXY_URL_X2U_KEYED_BASE ? 'USER_X2U_KEYED' : (settings.proxyModeForGET === 'custom_cors_anywhere' && settings.customProxyUrlForGET === PROXY_URL_CORS_ANYWHERE_OFFICIAL ? 'USER_CORS_ANYWHERE_OFFICIAL' : settings.proxyModeForGET)} onChange={(e) => handleProxyModeChange(e, 'GET')} className="input-field mt-1">
-                    <option value="vercel_serverless">Vercel Serverless (Targets 2ch.hk)</option>
-                    <option value="USER_X2U_KEYED">X2U Keyed (User Provided)</option>
-                    <option value="USER_CORS_ANYWHERE_OFFICIAL">CORS Anywhere Official (User Provided)</option>
-                    <option value="custom_cors_anywhere">CORS Anywhere Style (Custom)</option>
-                    <option value="custom_go_x2u">go.x2u.in Style (Custom)</option>
-                    <option value="custom_codetabs">CodeTabs Style (Custom)</option>
-                    <option value="custom_general_prefix">General Prefix Proxy (Custom)</option>
-                    <option value="custom_general_param">General Param Proxy (Custom)</option>
-                    <option value="none">No Proxy</option>
+                    <option value="vercel_serverless">Vercel Serverless (цель: 2ch.hk)</option>
+                    <option value="USER_X2U_KEYED">X2U с ключом (пользовательский)</option>
+                    <option value="USER_CORS_ANYWHERE_OFFICIAL">Официальный CORS Anywhere (пользовательский)</option>
+                    <option value="custom_cors_anywhere">Стиль CORS Anywhere (свой)</option>
+                    <option value="custom_go_x2u">Стиль go.x2u.in (свой)</option>
+                    <option value="custom_codetabs">Стиль CodeTabs (свой)</option>
+                    <option value="custom_general_prefix">Общий префикс-прокси (свой)</option>
+                    <option value="custom_general_param">Общий прокси с параметром (свой)</option>
+                    <option value="none">Без прокси</option>
                 </select>
-                {(settings.proxyModeForGET !=='vercel_serverless' && settings.proxyModeForGET !=='none') && (<input type="text" placeholder="Custom Proxy URL for Thread Data" value={settings.customProxyUrlForGET} onChange={e=>handleUpdateSettings({customProxyUrlForGET:e.target.value})} className="input-field mt-1"/>)}
+                {(settings.proxyModeForGET !=='vercel_serverless' && settings.proxyModeForGET !=='none') && (<input type="text" placeholder="URL своего прокси для данных треда" value={settings.customProxyUrlForGET} onChange={e=>handleUpdateSettings({customProxyUrlForGET:e.target.value})} className="input-field mt-1"/>)}
             </div>
             <div>
-                <label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Proxy for Images/Media:</label>
+                <label htmlFor="settingsProxyModeForImagesGET" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Прокси для изображений/медиа:</label>
                 <select id="settingsProxyModeForImagesGET" value={settings.proxyModeForImagesGET === 'custom_general_param' && settings.customProxyUrlForImagesGET === PROXY_URL_X2U_KEYED_BASE ? 'USER_X2U_KEYED' : (settings.proxyModeForImagesGET === 'custom_cors_anywhere' && settings.customProxyUrlForImagesGET === PROXY_URL_CORS_ANYWHERE_OFFICIAL ? 'USER_CORS_ANYWHERE_OFFICIAL' : settings.proxyModeForImagesGET)} onChange={(e) => handleProxyModeChange(e, 'ImagesGET')} className="input-field mt-1">
-                    <option value="USER_X2U_KEYED">X2U Keyed (User Provided)</option>
-                    <option value="USER_CORS_ANYWHERE_OFFICIAL">CORS Anywhere Official (User Provided)</option>
-                    <option value="custom_codetabs">CodeTabs Style (Default for Images)</option>
-                    <option value="custom_cors_anywhere">CORS Anywhere Style (Custom)</option>
-                    <option value="custom_go_x2u">go.x2u.in Style (Custom)</option>
-                    <option value="custom_general_prefix">General Prefix Proxy (Custom)</option>
-                    <option value="custom_general_param">General Param Proxy (Custom)</option>
-                    <option value="none">No Proxy</option>
+                    <option value="USER_X2U_KEYED">X2U с ключом (пользовательский)</option>
+                    <option value="USER_CORS_ANYWHERE_OFFICIAL">Официальный CORS Anywhere (пользовательский)</option>
+                    <option value="custom_codetabs">Стиль CodeTabs (по умолчанию для изображений)</option>
+                    <option value="custom_cors_anywhere">Стиль CORS Anywhere (свой)</option>
+                    <option value="custom_go_x2u">Стиль go.x2u.in (свой)</option>
+                    <option value="custom_general_prefix">Общий префикс-прокси (свой)</option>
+                    <option value="custom_general_param">Общий прокси с параметром (свой)</option>
+                    <option value="none">Без прокси</option>
                 </select>
-                {settings.proxyModeForImagesGET !=='none' && (<input type="text" placeholder="Custom Proxy URL for Images" value={settings.customProxyUrlForImagesGET} onChange={e=>handleUpdateSettings({customProxyUrlForImagesGET:e.target.value})} className="input-field mt-1"/>)}
+                {settings.proxyModeForImagesGET !=='none' && (<input type="text" placeholder="URL своего прокси для изображений" value={settings.customProxyUrlForImagesGET} onChange={e=>handleUpdateSettings({customProxyUrlForImagesGET:e.target.value})} className="input-field mt-1"/>)}
             </div>
         </div>
       </details>
       <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
-        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Gemini API & Model Settings</summary>
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Настройки Gemini API и моделей</summary>
         <div className="mt-3 space-y-3">
-            <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Gemini API Key Source:</label><select aria-label="Gemini API Key Source" value={settings.geminiApiKeySource} onChange={e=>handleUpdateSettings({geminiApiKeySource:e.target.value as 'env'|'user'})} className="input-field mt-1"><option value="env">Env API_KEY {currentProcessEnvApiKey?`(Detected: ${currentProcessEnvApiKey.substring(0,4)}...${currentProcessEnvApiKey.substring(currentProcessEnvApiKey.length-4)})`:"(Not Detected)"}</option><option value="user">Manual Input</option></select>{settings.geminiApiKeySource==='user'&&(<input aria-label="User Gemini API Key" type="password" placeholder="Gemini API Key" value={settings.userGeminiApiKey} onChange={e=>handleUpdateSettings({userGeminiApiKey:e.target.value})} autoComplete="new-password" className="input-field mt-1"/>)}</div>
-            <div className="p-2 border-t border-gray-200 dark:border-gray-600"><p className="text-sm text-gray-600 dark:text-gray-400">Safety: {settings.geminiSafetySettings.map(s=>`${s.category.replace("HARM_CATEGORY_","")}:${s.threshold.replace("BLOCK_","")}`).join(', ')}. (UI for this WIP)</p></div>
+            <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Источник Gemini API ключа:</label><select aria-label="Источник Gemini API ключа" value={settings.geminiApiKeySource} onChange={e=>handleUpdateSettings({geminiApiKeySource:e.target.value as 'env'|'user'})} className="input-field mt-1"><option value="env">Env API_KEY {currentProcessEnvApiKey?`(Обнаружен: ${currentProcessEnvApiKey.substring(0,4)}...${currentProcessEnvApiKey.substring(currentProcessEnvApiKey.length-4)})`:"(Не обнаружен)"}</option><option value="user">Ручной ввод</option></select>{settings.geminiApiKeySource==='user'&&(<input aria-label="User Gemini API Key" type="password" placeholder="Gemini API ключ" value={settings.userGeminiApiKey} onChange={e=>handleUpdateSettings({userGeminiApiKey:e.target.value})} autoComplete="new-password" className="input-field mt-1"/>)}</div>
+            <div className="p-2 border-t border-gray-200 dark:border-gray-600"><p className="text-sm text-gray-600 dark:text-gray-400">Безопасность: {settings.geminiSafetySettings.map(s=>`${s.category.replace("HARM_CATEGORY_","")}:${s.threshold.replace("BLOCK_","")}`).join(', ')}. (UI для этого в разработке)</p></div>
             <div>
-              <label htmlFor="settingsGeminiModel" className="block text-sm font-medium">Text Model:</label>
+              <label htmlFor="settingsGeminiModel" className="block text-sm font-medium">Текстовая модель:</label>
               <select
                 id="settingsGeminiModel"
                 value={settings.geminiTextModel}
@@ -1355,50 +1593,76 @@ useEffect(() => {
                 ))}
               </select>
             </div>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeOpMedia:e.target.checked})} className="checkbox-field"/>Gemini: Analyze Media in OP Posts (Manual Reply)</label>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeAnonMedia:e.target.checked})} className="checkbox-field"/>Gemini: Analyze Media in Anon Posts (Manual Reply)</label>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e=>handleUpdateSettings({geminiReplyWithGeneratedImage:e.target.checked})} className="checkbox-field"/>Gemini: Generate image with replies (Manual & Bot)</label>
-            <div><label htmlFor="maxImagesToAnalyzePerPost" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Images to Analyze/Post:</label><input id="maxImagesToAnalyzePerPost" type="number" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e=>handleUpdateSettings({maxImagesToAnalyzePerPost:parseInt(e.target.value)})} className="input-field mt-1"/></div>
-            <h4 className="text-md font-medium pt-2 text-gray-700 dark:text-gray-300">Gemini Model Config (Manual Replies)</h4>
-            <div><label htmlFor="geminiSystemInstructionManual" className="block text-sm font-medium text-gray-700 dark:text-gray-300">System Instruction (Manual Replies):</label><textarea id="geminiSystemInstructionManual" value={settings.geminiSystemInstruction} onChange={e=>handleUpdateSettings({geminiSystemInstruction:e.target.value})} rows={3} style={codeEditorStyle} className="mt-1 w-full"/></div>
+            <div>
+              <label htmlFor="settingsGeminiImageModel" className="block text-sm font-medium">Модель генерации изображений:</label>
+              <select
+                id="settingsGeminiImageModel"
+                value={settings.geminiImageModel}
+                onChange={e => handleUpdateSettings({geminiImageModel: e.target.value})}
+                className="input-field mt-1 w-full"
+              >
+                {SUPPORTED_GEMINI_IMAGE_MODELS.map(model => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            </div>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeOpMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeOpMedia:e.target.checked})} className="checkbox-field"/>Gemini: Анализировать медиа в ОП-постах (ручной ответ)</label>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeAnonMedia:e.target.checked})} className="checkbox-field"/>Gemini: Анализировать медиа в постах анонов (ручной ответ)</label>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e=>handleUpdateSettings({geminiReplyWithGeneratedImage:e.target.checked})} className="checkbox-field"/>Gemini: Генерировать изображение с ответами (ручной и бот)</label>
+            <div>
+              <label htmlFor="settingsGeminiAudioModel" className="block text-sm font-medium">Модель генерации аудио:</label>
+              <select
+                id="settingsGeminiAudioModel"
+                value={settings.geminiAudioModel}
+                onChange={e => handleUpdateSettings({geminiAudioModel: e.target.value})}
+                className="input-field mt-1 w-full"
+              >
+                {SUPPORTED_GEMINI_AUDIO_MODELS.map(model => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            </div>
+            <div><label htmlFor="maxImagesToAnalyzePerPost" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Макс. изображений для анализа/поста:</label><input id="maxImagesToAnalyzePerPost" type="number" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e=>handleUpdateSettings({maxImagesToAnalyzePerPost:parseInt(e.target.value)})} className="input-field mt-1"/></div>
+            <h4 className="text-md font-medium pt-2 text-gray-700 dark:text-gray-300">Настройки модели Gemini (ручные ответы)</h4>
+            <div><label htmlFor="geminiSystemInstructionManual" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Системная инструкция (ручные ответы):</label><textarea id="geminiSystemInstructionManual" value={settings.geminiSystemInstruction} onChange={e=>handleUpdateSettings({geminiSystemInstruction:e.target.value})} rows={3} style={codeEditorStyle} className="mt-1 w-full"/></div>
             <div className="grid grid-cols-2 gap-4">
-                <div><label htmlFor="geminiTemp" className="text-sm text-gray-700 dark:text-gray-300">Temperature:</label><input id="geminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e=>handleUpdateSettings({geminiTemperature:parseFloat(e.target.value)})} className="input-field-sm w-full"/></div>
+                <div><label htmlFor="geminiTemp" className="text-sm text-gray-700 dark:text-gray-300">Температура:</label><input id="geminiTemp" type="number" step="0.05" min="0" max="1" value={settings.geminiTemperature} onChange={e=>handleUpdateSettings({geminiTemperature:parseFloat(e.target.value)})} className="input-field-sm w-full"/></div>
                 <div><label htmlFor="geminiTopP" className="text-sm text-gray-700 dark:text-gray-300">Top P:</label><input id="geminiTopP" type="number" step="0.05" min="0" max="1" value={settings.geminiTopP} onChange={e=>handleUpdateSettings({geminiTopP:parseFloat(e.target.value)})} className="input-field-sm w-full"/></div>
                 <div><label htmlFor="geminiTopK" className="text-sm text-gray-700 dark:text-gray-300">Top K:</label><input id="geminiTopK" type="number" step="1" min="1" value={settings.geminiTopK} onChange={e=>handleUpdateSettings({geminiTopK:parseInt(e.target.value)})} className="input-field-sm w-full"/></div>
-                <div><label htmlFor="geminiMaxOut" className="text-sm text-gray-700 dark:text-gray-300">Max Output Tokens:</label><input id="geminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e=>handleUpdateSettings({geminiMaxOutputTokens:parseInt(e.target.value)})} className="input-field-sm w-full"/></div>
+                <div><label htmlFor="geminiMaxOut" className="text-sm text-gray-700 dark:text-gray-300">Макс. выходных токенов:</label><input id="geminiMaxOut" type="number" step="64" min="64" value={settings.geminiMaxOutputTokens} onChange={e=>handleUpdateSettings({geminiMaxOutputTokens:parseInt(e.target.value)})} className="input-field-sm w-full"/></div>
             </div>
-            <div><label htmlFor="geminiMime" className="block text-sm text-gray-700 dark:text-gray-300">Response MIME Type (Manual):</label><select id="geminiMime" value={settings.geminiResponseMimeType} onChange={e=>handleUpdateSettings({geminiResponseMimeType:e.target.value as 'text/plain'|'application/json'})} className="input-field mt-1 w-full"><option value="text/plain">text/plain</option><option value="application/json">application/json</option></select></div>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e=>handleUpdateSettings({useThinkingBudget:e.target.checked})} className="checkbox-field"/>Use Thinking Budget (Manual)</label>
-            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm text-gray-700 dark:text-gray-300">Thinking Budget (Manual, 0 to disable):</label><input id="geminiThinkBudget" type="number" step="1" min="0" value={settings.geminiThinkingBudget} onChange={e=>handleUpdateSettings({geminiThinkingBudget:parseInt(e.target.value)})} className="input-field-sm w-full"/></div>}
+            <div><label htmlFor="geminiMime" className="block text-sm text-gray-700 dark:text-gray-300">MIME-тип ответа (ручной):</label><select id="geminiMime" value={settings.geminiResponseMimeType} onChange={e=>handleUpdateSettings({geminiResponseMimeType:e.target.value as 'text/plain'|'application/json'})} className="input-field mt-1 w-full"><option value="text/plain">text/plain</option><option value="application/json">application/json</option></select></div>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.useThinkingBudget} onChange={e=>handleUpdateSettings({useThinkingBudget:e.target.checked})} className="checkbox-field"/>Использовать бюджет на обдумывание (ручной)</label>
+            {settings.useThinkingBudget && <div><label htmlFor="geminiThinkBudget" className="text-sm text-gray-700 dark:text-gray-300">Бюджет на обдумывание (ручной, 0 для откл.):</label><input id="geminiThinkBudget" type="number" step="1" min="0" value={settings.geminiThinkingBudget} onChange={e=>handleUpdateSettings({geminiThinkingBudget:parseInt(e.target.value)})} className="input-field-sm w-full"/></div>}
         </div>
       </details>
       <details open className="p-3 border rounded-md border-gray-200 dark:border-gray-600">
-        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Autonomous Bot Settings</summary>
+        <summary className="text-lg font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">Настройки автономного бота</summary>
         <div className="mt-3 space-y-3">
-            <div><label htmlFor="botSystemPrompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bot System Prompt (Persona & Style):</label><textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e=>handleUpdateSettings({autonomousBotSystemPrompt:e.target.value})} rows={4} style={codeEditorStyle} className="mt-1 w-full"/></div>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e=>handleUpdateSettings({botAnalyzesImagesInTriggerPosts:e.target.checked})} className="checkbox-field"/>Bot: Analyze Images in Trigger Posts</label>
-            <div><label htmlFor="botReplyMode" className="block text-sm text-gray-700 dark:text-gray-300">Bot Reply Mode:</label><select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e=>handleUpdateSettings({autonomousBotReplyMode:e.target.value as AutonomousBotReplyMode})} className="input-field mt-1 w-full"><option value="random_in_thread">Random Post in Thread</option><option value="replies_to_bot">Replies to Bot's Own Posts (WIP)</option></select></div>
-            <div><label htmlFor="botInterval" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bot Cycle Interval (seconds):</label><input id="botInterval" type="number" min="10" value={settings.autonomousBotCycleIntervalSeconds} onChange={e=>handleUpdateSettings({autonomousBotCycleIntervalSeconds:parseInt(e.target.value)})} className="input-field mt-1"/></div>
-            <div><label htmlFor="botMinPostInterval" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Post Interval (seconds, bot-wide):</label><input id="botMinPostInterval" type="number" min="10" value={settings.autonomousBotMinPostIntervalSeconds} onChange={e=>handleUpdateSettings({autonomousBotMinPostIntervalSeconds:parseInt(e.target.value)})} className="input-field mt-1"/></div>
-            <div className="grid grid-cols-2 gap-4"><div><label htmlFor="botMinReplyDelay" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Reply Delay (ms):</label><input id="botMinReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMinReplyDelayMs} onChange={e=>handleUpdateSettings({autonomousBotMinReplyDelayMs:parseInt(e.target.value)})} className="input-field mt-1"/></div><div><label htmlFor="botMaxReplyDelay" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Reply Delay (ms):</label><input id="botMaxReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMaxReplyDelayMs} onChange={e=>handleUpdateSettings({autonomousBotMaxReplyDelayMs:parseInt(e.target.value)})} className="input-field mt-1"/></div></div>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.autonomousBotDisableThinking} onChange={e=>handleUpdateSettings({autonomousBotDisableThinking:e.target.checked})} className="checkbox-field"/>Bot: Disable Thinking (speed/lower quality)</label>
-            <label className="checkbox-label"><input type="checkbox" checked={settings.autonomousBotAllowReplyToSelf} onChange={e=>handleUpdateSettings({autonomousBotAllowReplyToSelf:e.target.checked})} className="checkbox-field"/>Bot: Allow Reply to Own Posts</label>
-            <div><label htmlFor="botInitialContextScope" className="block text-sm text-gray-700 dark:text-gray-300">Bot: Initial Thread Context Scope:</label><select id="botInitialContextScope" value={settings.autonomousBotInitialContextScope} onChange={e=>handleUpdateSettings({autonomousBotInitialContextScope:e.target.value as AutonomousBotInitialContextScope})} className="input-field mt-1 w-full"><option value="op_only">OP Post Only</option><option value="full_thread">Full Thread Summary</option></select></div>
-            {settings.autonomousBotInitialContextScope==='full_thread'&&(<div><label htmlFor="botFullContextChars" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bot: Full Thread Context Max Chars (0=unlimited):</label><input id="botFullContextChars" type="number" min="0" step="1000" value={settings.autonomousBotFullThreadContextMaxChars} onChange={e=>handleUpdateSettings({autonomousBotFullThreadContextMaxChars:parseInt(e.target.value)})} className="input-field mt-1"/></div>)}
+            <div><label htmlFor="botSystemPrompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Системный промпт бота (персона и стиль):</label><textarea id="botSystemPrompt" value={settings.autonomousBotSystemPrompt} onChange={e=>handleUpdateSettings({autonomousBotSystemPrompt:e.target.value})} rows={4} style={codeEditorStyle} className="mt-1 w-full"/></div>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.botAnalyzesImagesInTriggerPosts} onChange={e=>handleUpdateSettings({botAnalyzesImagesInTriggerPosts:e.target.checked})} className="checkbox-field"/>Бот: Анализировать изображения в триггер-постах</label>
+            <div><label htmlFor="botReplyMode" className="block text-sm text-gray-700 dark:text-gray-300">Режим ответов бота:</label><select id="botReplyMode" value={settings.autonomousBotReplyMode} onChange={e=>handleUpdateSettings({autonomousBotReplyMode:e.target.value as AutonomousBotReplyMode})} className="input-field mt-1 w-full"><option value="random_in_thread">Случайный пост в треде</option><option value="replies_to_bot">Ответы на посты бота (в разработке)</option></select></div>
+            <div><label htmlFor="botInterval" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Интервал циклов бота (секунды):</label><input id="botInterval" type="number" min="10" value={settings.autonomousBotCycleIntervalSeconds} onChange={e=>handleUpdateSettings({autonomousBotCycleIntervalSeconds:parseInt(e.target.value)})} className="input-field mt-1"/></div>
+            <div><label htmlFor="botMinPostInterval" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Мин. интервал постов (секунды, для всего бота):</label><input id="botMinPostInterval" type="number" min="10" value={settings.autonomousBotMinPostIntervalSeconds} onChange={e=>handleUpdateSettings({autonomousBotMinPostIntervalSeconds:parseInt(e.target.value)})} className="input-field mt-1"/></div>
+            <div className="grid grid-cols-2 gap-4"><div><label htmlFor="botMinReplyDelay" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Мин. задержка ответа (мс):</label><input id="botMinReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMinReplyDelayMs} onChange={e=>handleUpdateSettings({autonomousBotMinReplyDelayMs:parseInt(e.target.value)})} className="input-field mt-1"/></div><div><label htmlFor="botMaxReplyDelay" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Макс. задержка ответа (мс):</label><input id="botMaxReplyDelay" type="number" min="0" step="500" value={settings.autonomousBotMaxReplyDelayMs} onChange={e=>handleUpdateSettings({autonomousBotMaxReplyDelayMs:parseInt(e.target.value)})} className="input-field mt-1"/></div></div>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.autonomousBotDisableThinking} onChange={e=>handleUpdateSettings({autonomousBotDisableThinking:e.target.checked})} className="checkbox-field"/>Бот: Отключить обдумывание (скорость/ниже качество)</label>
+            <label className="checkbox-label"><input type="checkbox" checked={settings.autonomousBotAllowReplyToSelf} onChange={e=>handleUpdateSettings({autonomousBotAllowReplyToSelf:e.target.checked})} className="checkbox-field"/>Бот: Разрешить отвечать на свои посты</label>
+            <div><label htmlFor="botInitialContextScope" className="block text-sm text-gray-700 dark:text-gray-300">Бот: Область начального контекста треда:</label><select id="botInitialContextScope" value={settings.autonomousBotInitialContextScope} onChange={e=>handleUpdateSettings({autonomousBotInitialContextScope:e.target.value as AutonomousBotInitialContextScope})} className="input-field mt-1 w-full"><option value="op_only">Только ОП-пост</option><option value="full_thread">Сводка по всему треду</option></select></div>
+            {settings.autonomousBotInitialContextScope==='full_thread'&&(<div><label htmlFor="botFullContextChars" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Бот: Макс. символов контекста треда (0=без огр.):</label><input id="botFullContextChars" type="number" min="0" step="1000" value={settings.autonomousBotFullThreadContextMaxChars} onChange={e=>handleUpdateSettings({autonomousBotFullThreadContextMaxChars:parseInt(e.target.value)})} className="input-field mt-1"/></div>)}
         </div>
       </details>
-      <p className="text-xs text-gray-500 dark:text-gray-400">Settings are saved automatically.</p>
+      <p className="text-xs text-gray-500 dark:text-gray-400">Настройки сохраняются автоматически.</p>
     </div>
   )};
 
   const renderLogsPanel = () => (
     <div className="space-y-6 p-4 md:p-6 bg-white dark:bg-gray-800 shadow-lg rounded-lg">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700 flex-grow">Event Logs</h2>
-        <button onClick={()=>setLogs([])} className="btn-danger text-xs flex items-center" title="Clear Logs" disabled={logs.length===0}><IconTrash className="mr-1 h-4 w-4"/>Clear Logs</button>
+        <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 border-b pb-2 border-gray-300 dark:border-gray-700 flex-grow">Журнал событий</h2>
+        <button onClick={()=>setLogs([])} className="btn-danger text-xs flex items-center" title="Очистить логи" disabled={logs.length===0}><IconTrash className="mr-1 h-4 w-4"/>Очистить логи</button>
       </div>
       <div className="max-h-[600px] overflow-y-auto bg-gray-50 dark:bg-gray-900 p-3 rounded border border-gray-200 dark:border-gray-700">
-        {logs.length===0 && <p className="text-center text-gray-500 dark:text-gray-400">No logs yet.</p>}
+        {logs.length===0 && <p className="text-center text-gray-500 dark:text-gray-400">Логов пока нет.</p>}
         {logs.map(log=>{const dataDisplay:string|null=(log.data!==undefined&&log.data!==null)?formatLogDataForDisplay(log.data):null;return(<div key={log.id} className={`text-xs p-1.5 mb-1 rounded border-l-4 ${log.type==='error'||log.type==='bot_error'?'log-error':log.type==='success'?'log-success':log.type==='warning'||log.type==='bot_warning'?'log-warning':log.type==='gemini'?'log-gemini':log.type==='dvach'?'log-dvach':log.type==='auth'?'log-auth':log.type==='bot_activity'||log.type==='bot_setup'?'log-bot': 'log-info'}`}><span className="font-medium">[{new Date(log.timestamp).toLocaleTimeString()}] [{log.type.toUpperCase()}]</span>: {log.message}{dataDisplay&&(<pre className="mt-1 text-xs whitespace-pre-wrap bg-gray-200 dark:bg-gray-600 p-1 rounded overflow-x-auto">{dataDisplay}</pre>)}</div>);})}
       </div>
     </div>
@@ -1411,7 +1675,7 @@ useEffect(() => {
           <h1 className="text-2xl font-bold text-blue-600 dark:text-blue-400">Dvach Gemini Bot</h1>
           <div className="flex items-center space-x-4">
             {settings.userAgent && <span className="text-xs text-gray-500 dark:text-gray-400 hidden md:block truncate max-w-xs" title={settings.userAgent}>UA: {settings.userAgent.substring(0,40)}...</span>}
-            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" aria-label={`Toggle theme (current: ${settings.theme})`} title={`Change theme. Current: ${settings.theme}.`}>
+            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" aria-label={`Переключить тему (текущая: ${settings.theme})`} title={`Сменить тему. Текущая: ${settings.theme}.`}>
               <ThemeIconComponent className="h-6 w-6" />
             </button>
           </div>
@@ -1420,10 +1684,10 @@ useEffect(() => {
       <nav className="bg-gray-50 dark:bg-gray-800 border-b border-t border-gray-200 dark:border-gray-700 sticky top-[72px] z-40"> {/* Assuming header height is approx 72px */}
         <div className="container mx-auto flex justify-center sm:justify-start flex-wrap">
           {[
-            { id: 'dvach', label: 'Manual Ops', icon: IconCpu },
-            { id: 'bot_control', label: 'Autonomous Bot', icon: IconMessageChat },
-            { id: 'settings', label: 'Settings', icon: IconSettings },
-            { id: 'logs', label: 'Logs', icon: IconTerminal },
+            { id: 'dvach', label: 'Ручные операции', icon: IconCpu },
+            { id: 'bot_control', label: 'Автономный бот', icon: IconMessageChat },
+            { id: 'settings', label: 'Настройки', icon: IconSettings },
+            { id: 'logs', label: 'Логи', icon: IconTerminal },
           ].map((tabLink) => (
             <button key={tabLink.id} onClick={() => setActiveTab(tabLink.id as 'dvach' | 'bot_control' | 'settings' | 'logs')} aria-current={activeTab === tabLink.id ? "page" : undefined} className={`nav-tab-button ${activeTab === tabLink.id ? 'nav-tab-active' : 'nav-tab-inactive'}`}>
               <tabLink.icon aria-hidden="true" className="h-5 w-5 mr-1 sm:mr-1.5 flex-shrink-0" />
@@ -1441,7 +1705,7 @@ useEffect(() => {
         </div>
       </main>
       <footer className="text-center py-4 border-t border-gray-200 dark:border-gray-700 mt-8">
-        <p className="text-xs text-gray-500 dark:text-gray-400">Dvach Gemini Bot Interface - Version {APP_VERSION} - Use responsibly.</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Интерфейс Dvach Gemini Bot - Версия {APP_VERSION} - Используйте ответственно.</p>
       </footer>
     </div>
   );

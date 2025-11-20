@@ -237,6 +237,8 @@ export interface AppSettings {
   prefilledPostMessages: string;
   prefilledPostTargets: string;
   geminiTextModel: string;
+  geminiImageModel: string;
+  geminiAudioModel: string;
 }
 
 export interface LogEntry {
