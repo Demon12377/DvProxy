@@ -30,7 +30,7 @@ export const SUPPORTED_GEMINI_TEXT_MODELS = [
   "gemini-2.0-flash",
   "gemini-2.0-flash-lite",
 ];
-export const GEMINI_IMAGE_MODEL = "imagen-3.0-generate-002";
+export const GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
 export const AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS = 8000;
 
 export const THREAD_CACHE_DURATION_MS = 1 * 45 * 1000;
@@ -80,12 +80,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   maxImagesToAnalyzePerPost: DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST,
   analyzeVideosInTriggerPosts: false,
   geminiSafetySettings: DEFAULT_GEMINI_SAFETY_SETTINGS,
-  geminiThinkingLevel: 'high',
   geminiMediaResolution: 'high',
 
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
-  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда. Твои ответы должны быть остроумными, ироничными или информативными, в зависимости от контекста. Пиши в стиле, характерном для имиджбордов. Обращай внимание на историю беседы, включая свои предыдущие сообщения, чтобы избегать повторений и давать разнообразные ответы. Ты должен ответить в формате JSON { \"replyText\": \"твой ответ\" }.",
+  autonomousBotSystemPrompt: "Ты — анонимный пользователь имиджборда. Твоя цель — поддерживать интересный и живой диалог. Задавай вопросы, делись мнениями и старайся вовлечь других в разговор. Не отвечай самому себе. Твои ответы должны быть остроумными, ироничными или информативными, в зависимости от контекста. Пиши в стиле, характерном для имиджбордов. Обращай внимание на историю беседы, включая свои предыдущие сообщения, чтобы избегать повторений и давать разнообразные ответы. Ты должен ответить в формате JSON { \"replyText\": \"твой ответ\" }.",
   botAnalyzesImagesInTriggerPosts: true,
   autonomousBotReplyMode: 'random_in_thread',
   autonomousBotCycleIntervalSeconds: 75,

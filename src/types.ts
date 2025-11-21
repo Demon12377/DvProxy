@@ -198,8 +198,7 @@ export interface AppSettings {
   geminiReplyWithGeneratedImage: boolean;
   maxImagesToAnalyzePerPost: number;
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
-  geminiSafetySettings: SafetySettingRule[]; 
-  geminiThinkingLevel: 'low' | 'high';
+  geminiSafetySettings: SafetySettingRule[];
   geminiMediaResolution: 'low' | 'medium' | 'high';
 
   // Autonomous Bot specific settings
