@@ -12,6 +12,10 @@ interface Part extends GooglePart {
   };
 }
 
+interface GenerateContentParameters extends GoogleGenerateContentParameters {
+  thinkingLevel?: 'low' | 'high';
+}
+
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse,
@@ -19,7 +23,7 @@ import {
   DvachSessionCookies, AutonomousBotReplyMode, BotOpMediaCache, AutonomousBotInitialContextScope,
   GroundingChunk, CustomGenerateContentResponse, ActiveTask
 } from './types';
-import { getThreadData, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
+import { getThreadData, getNewPosts, getThreads, loginToDvach, postWithSessionCookie, base64ToFile, extractDvachApiError, buildProxiedGetUrl } from './services/dvachService';
 import { parseGeminiJsonResponse } from './services/geminiService';
 import {
   APP_SETTINGS_KEY, SENT_MESSAGES_KEY, APP_VERSION,
@@ -39,7 +43,7 @@ import {
   IconSettings, IconTerminal, IconSend, IconTrash, IconCpu,
   IconSparkles, IconAlertTriangle, IconRefresh,
   IconLogin, IconLogout, IconUserCircle, IconPlayerPlay, IconPlayerStop, IconMessageChat,
-  IconSun, IconMoon,
+  IconSun, IconMoon, IconSearch,
 } from './components/Icons';
 
 interface BotReplySchema {
@@ -138,6 +142,8 @@ const App: React.FC = () => {
   const [isFetchingThread, setIsFetchingThread] = useState<boolean>(false);
   const threadPostsContainerRef = useRef<HTMLDivElement>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [threadAnalysis, setThreadAnalysis] = useState<string | null>(null);
+  const [isAnalyzingThread, setIsAnalyzingThread] = useState<boolean>(false);
 
   const [geminiLoading, setGeminiLoading] = useState<boolean>(false);
 
@@ -146,6 +152,7 @@ const App: React.FC = () => {
   const [autonomousBotActive, setAutonomousBotActive] = useState<boolean>(false);
   const [autonomousBotStatus, setAutonomousBotStatus] = useState<string>("Inactive");
   const [autonomousBotActivityLog, setAutonomousBotActivityLog] = useState<string[]>([]);
+  const [availableThreads, setAvailableThreads] = useState<DvachPost[]>([]);
   const [geminiDvachConversations, setGeminiDvachConversations] = useState<Map<string, GeminiDvachConversation>>(() => {
     const saved = localStorage.getItem(GEMINI_DVACH_CONVERSATIONS_KEY);
     if (saved) {
@@ -485,6 +492,39 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAnalyzeThread = async () => {
+    if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
+    if (currentFetchedDvachPosts.length === 0) {
+      addLog('No posts to analyze.', 'warning');
+      return;
+    }
+
+    setIsAnalyzingThread(true);
+    setThreadAnalysis(null);
+    const taskId = addTask('gemini_request', `Analyzing thread ${currentBoard}/${currentThreadId}`);
+    addLog(`Analyzing thread ${currentBoard}/${currentThreadId}...`, 'gemini');
+
+    const threadContent = currentFetchedDvachPosts.map(p => `>>${p.num}: ${p.comment.replace(/<[^>]*>?/gm, '')}`).join('\n\n');
+    const userPromptText = `Please analyze the following thread from the imageboard ${currentDvachBaseUrl}/${currentBoard}/${currentThreadId}. Provide a summary of the main topics, the overall sentiment, and any notable points of discussion.\n\n${threadContent}`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: settings.geminiTextModel,
+        contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
+      });
+      const analysis = response.text;
+      setThreadAnalysis(analysis ?? '');
+      addLog('Thread analysis complete.', 'success');
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      addLog(`Error during thread analysis: ${errorMsg}`, 'error', error);
+      setThreadAnalysis(`Error: ${errorMsg}`);
+    } finally {
+      setIsAnalyzingThread(false);
+      removeTask(taskId);
+    }
+  };
+
   const handleManualGeminiReplyToDvachPost = async (targetPost: DvachPost) => {
     if (!ai) { addLog('Gemini AI not initialized.', 'error'); return; }
     if (!dvachSessionCookies?.passcode_auth) {
@@ -621,13 +661,12 @@ const App: React.FC = () => {
 
     let geminiReplyText = "";
     try {
-      const requestConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
+      const requestConfig: GenerateContentParameters['config'] = {
         systemInstruction: systemInstructionForReply,
         temperature: settings.geminiTemperature, topP: settings.geminiTopP,
         topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
         responseMimeType: settings.geminiResponseMimeType,
         safetySettings: settings.geminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any})),
-        thinkingLevel: settings.geminiThinkingLevel,
       };
 
       const response = await ai.models.generateContent({
@@ -776,9 +815,23 @@ const runBotCycleCallback = useCallback(async () => {
 
 
     try {
-        const threadPostsResponse = await getThreadData(currentDvachBaseUrl, botBoard, botThreadId, proxyModeForGET, customProxyUrlForGET, userAgent);
-        const allPostsInThread = threadPostsResponse?.threads?.[0]?.posts || [];
-        const opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
+        let allPostsInThread: DvachPost[];
+        let opPost: DvachPost | undefined;
+
+        if (workingConvoCandidate && workingConvoCandidate.participatingPostNumbers.length > 0) {
+            const lastKnownPostNum = Math.max(...workingConvoCandidate.participatingPostNumbers.map(n => parseInt(n, 10))).toString();
+            const newPosts = await getNewPosts(botBoard, botThreadId, lastKnownPostNum, userAgent);
+            const threadPostsResponse = await getThreadData(currentDvachBaseUrl, botBoard, botThreadId, proxyModeForGET, customProxyUrlForGET, userAgent);
+            allPostsInThread = threadPostsResponse?.threads?.[0]?.posts || [];
+            opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
+            if (newPosts.length > 0) {
+                allPostsInThread.push(...newPosts);
+            }
+        } else {
+            const threadPostsResponse = await getThreadData(currentDvachBaseUrl, botBoard, botThreadId, proxyModeForGET, customProxyUrlForGET, userAgent);
+            allPostsInThread = threadPostsResponse?.threads?.[0]?.posts || [];
+            opPost = allPostsInThread.find(p => p.num === botThreadId || p.op === 1);
+        }
 
         if (!opPost) { 
             addAutonomousBotActivityLog(`OP Post for ${currentDvachBaseUrl}/${botBoard}/${botThreadId} not found. Cannot build context or reply. Skipping cycle.`, 'bot_error');
@@ -945,14 +998,13 @@ const runBotCycleCallback = useCallback(async () => {
                 currentUserMsgParts.push({text:currentUserMsgTxt+`\n\nInstruction: Generate a suitable reply based on the conversation history and this target post. Your response must be in JSON format: { "replyText": "your reply content here" }. Ensure the reply content itself does not include the '>>${targetPost.num}' quote, as it will be added automatically.`});
                 histForGemini.push({id:`user-dvach-${targetPost.num}`,role:'user',parts:currentUserMsgParts,timestamp:Date.now()});
 
-                const botGenConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
+                const botGenConfig: GoogleGenerateContentParameters['config'] = {
                     systemInstruction: autonomousBotSystemPrompt,
                     temperature:0.85, topK:50, topP:0.95,
                     maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
                     responseMimeType:"application/json",
                     responseSchema:{type:"object",properties:{replyText:{type:"string",description:"The bot's reply text, excluding the initial >>POST_NUM quote."}},required:["replyText"]},
                     safetySettings: botGeminiSafetySettings.map(s=>({category:s.category as any,threshold:s.threshold as any})),
-                    thinkingLevel: settings.geminiThinkingLevel,
                 };
 
                 const geminiResponse = await ai.models.generateContent({model:settings.geminiTextModel,contents:histForGemini,config:botGenConfig});
@@ -1044,14 +1096,13 @@ const runBotCycleCallback = useCallback(async () => {
                 currentUserMsgParts.push({ text: currentUserMsgTxt + `\n\nInstruction: Generate a suitable reply based on the conversation history and this target post. Your response must be in JSON format: { "replyText": "your reply content here" }. Ensure the reply content itself does not include the '>>${targetPost.num}' quote, as it will be added automatically.` });
                 histForGemini.push({ id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMsgParts, timestamp: Date.now() });
 
-                const botGenConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
+                const botGenConfig: GoogleGenerateContentParameters['config'] = {
                     systemInstruction: autonomousBotSystemPrompt,
                     temperature: 0.85, topK: 50, topP: 0.95,
                     maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
                     responseMimeType: "application/json",
                     responseSchema: { type: "object", properties: { replyText: { type: "string", description: "The bot's reply text, excluding the initial >>POST_NUM quote." } }, required: ["replyText"] },
                     safetySettings: botGeminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any })),
-                    thinkingLevel: settings.geminiThinkingLevel,
                 };
 
                 const geminiResponse = await ai.models.generateContent({ model: settings.geminiTextModel, contents: histForGemini, config: botGenConfig });
@@ -1148,14 +1199,13 @@ const runBotCycleCallback = useCallback(async () => {
                     currentUserMsgParts.push({ text: currentUserMsgTxt + `\n\nInstruction: Generate a suitable reply based on the conversation history and this target post. Your response must be in JSON format: { "replyText": "your reply content here" }. Ensure the reply content itself does not include the '>>${targetPost.num}' quote, as it will be added automatically.` });
                     histForGemini.push({ id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMsgParts, timestamp: Date.now() });
 
-                    const botGenConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
+                    const botGenConfig: GoogleGenerateContentParameters['config'] = {
                         systemInstruction: autonomousBotSystemPrompt,
                         temperature: 0.85, topK: 50, topP: 0.95,
                         maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
                         responseMimeType: "application/json",
                         responseSchema: { type: "object", properties: { replyText: { type: "string", description: "The bot's reply text, excluding the initial >>POST_NUM quote." } }, required: ["replyText"] },
                         safetySettings: botGeminiSafetySettings.map(s => ({ category: s.category as any, threshold: s.threshold as any })),
-                        thinkingLevel: settings.geminiThinkingLevel,
                     };
 
                     const geminiResponse = await ai.models.generateContent({ model: settings.geminiTextModel, contents: histForGemini, config: botGenConfig });
@@ -1492,6 +1542,18 @@ useEffect(() => {
             {!isFetchingThread && currentFetchedDvachPosts.length === 0 && currentBoard.trim() && currentThreadId.trim() && !fetchError && <p className="text-center p-4 text-gray-500 dark:text-gray-400">Thread empty or error (check logs).</p>}
             {currentFetchedDvachPosts.map(renderDvachPostCard)}
         </div>
+        <div className="mt-4">
+          <button onClick={handleAnalyzeThread} disabled={isAnalyzingThread || currentFetchedDvachPosts.length === 0} className="btn-secondary flex items-center">
+            <IconSearch className={`mr-2 h-5 w-5 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
+            {isAnalyzingThread ? 'Analyzing...' : 'Analyze Thread'}
+          </button>
+          {threadAnalysis && (
+            <div className="mt-2 p-4 border rounded-md bg-gray-50 dark:bg-gray-700">
+              <h4 className="font-semibold text-lg mb-2">Thread Analysis:</h4>
+              <p className="text-sm whitespace-pre-wrap">{threadAnalysis}</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1515,6 +1577,25 @@ useEffect(() => {
         <div><label htmlFor="botPanelTargetThreadId" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bot Target Thread ID:</label><input id="botPanelTargetThreadId" type="text" value={settings.autonomousBotTargetThreadId} onChange={e => handleUpdateSettings({ autonomousBotTargetThreadId: e.target.value })} className="input-field mt-1"/></div>
       </div>
        {(!ai || !dvachSessionCookies?.passcode_auth || !settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) && <div className="alert-warning"><p className="font-semibold">Bot cannot start:</p><ul className="list-disc list-inside ml-4 text-xs">{!ai && <li>Gemini AI not initialized.</li>}{!dvachSessionCookies?.passcode_auth && <li>Not logged into Dvach.</li>}{(!settings.autonomousBotTargetBoard.trim() || !settings.autonomousBotTargetThreadId.trim()) && <li>Bot target board/thread not set.</li>}</ul></div>}
+      <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
+        <button onClick={async () => setAvailableThreads(await getThreads(settings.autonomousBotTargetBoard))} className="btn-secondary">
+          Fetch Threads
+        </button>
+        {availableThreads.length > 0 && (
+          <div className="mt-2">
+            <h4 className="font-semibold">Available Threads:</h4>
+            <ul>
+              {availableThreads.map(thread => (
+                <li key={thread.num}>
+                  <button onClick={() => handleUpdateSettings({ autonomousBotTargetThreadId: thread.num })}>
+                    {thread.subject || thread.comment.substring(0, 50)}...
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
       <div className="p-4 border rounded-md border-gray-200 dark:border-gray-700">
         <h3 className="text-lg font-medium mb-2 text-gray-700 dark:text-gray-300">Bot Status & Activity</h3>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Status: <span className="font-semibold">{autonomousBotStatus}</span></p>
@@ -1655,13 +1736,6 @@ useEffect(() => {
             <label className="checkbox-label"><input type="checkbox" checked={settings.geminiAnalyzeAnonMedia} onChange={e=>handleUpdateSettings({geminiAnalyzeAnonMedia:e.target.checked})} className="checkbox-field"/>Gemini: Analyze Media in Anon Posts (Manual Reply)</label>
             <label className="checkbox-label"><input type="checkbox" checked={settings.geminiReplyWithGeneratedImage} onChange={e=>handleUpdateSettings({geminiReplyWithGeneratedImage:e.target.checked})} className="checkbox-field"/>Gemini: Generate image with replies (Manual & Bot)</label>
             <div><label htmlFor="maxImagesToAnalyzePerPost" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Images to Analyze/Post:</label><input id="maxImagesToAnalyzePerPost" type="number" min="0" max="5" value={settings.maxImagesToAnalyzePerPost} onChange={e=>handleUpdateSettings({maxImagesToAnalyzePerPost:parseInt(e.target.value)})} className="input-field mt-1"/></div>
-            <div>
-              <label htmlFor="settingsGeminiThinkingLevel" className="block text-sm font-medium">Thinking Level:</label>
-              <select id="settingsGeminiThinkingLevel" value={settings.geminiThinkingLevel} onChange={e => handleUpdateSettings({ geminiThinkingLevel: e.target.value as 'low' | 'high' })} className="input-field mt-1 w-full">
-                <option value="high">High</option>
-                <option value="low">Low</option>
-              </select>
-            </div>
             <div>
               <label htmlFor="settingsGeminiMediaResolution" className="block text-sm font-medium">Media Resolution:</label>
               <select id="settingsGeminiMediaResolution" value={settings.geminiMediaResolution} onChange={e => handleUpdateSettings({ geminiMediaResolution: e.target.value as 'low' | 'medium' | 'high' })} className="input-field mt-1 w-full">

@@ -314,3 +314,98 @@ export async function base64ToFile(base64: string, filename: string, mimeType: s
   const blob = await res.blob();
   return new File([blob], filename, { type: mimeType });
 }
+
+export async function getNewPosts(
+  board: string,
+  threadId: string,
+  lastPostNum: string,
+  userAgent: string = DEFAULT_USER_AGENT
+): Promise<DvachPost[]> {
+  if (!board || !threadId || !lastPostNum) {
+    throw new Error("Board, Thread ID, and Last Post Number are required for getNewPosts.");
+  }
+
+  const fetchUrl = `/api/mobile/v2/after/${board}/${threadId}/${lastPostNum}`;
+  const requestHeaders: HeadersInit = {
+    'Accept': 'application/json',
+    'X-User-Agent': userAgent
+  };
+
+  console.info(`[dvachService/getNewPosts] Fetching new posts via: ${fetchUrl} (UA: ${userAgent})`);
+
+  let response;
+  try {
+    response = await fetch(fetchUrl, { headers: requestHeaders });
+  } catch (networkError) {
+    console.error(`[dvachService/getNewPosts] Network error fetching ${fetchUrl}:`, networkError);
+    throw new Error(`Network error while fetching new posts: ${(networkError as Error).message}. URL: ${fetchUrl}`);
+  }
+
+  const responseBodyText = await response.text();
+  if (!response.ok) {
+    console.error(`[dvachService/getNewPosts] Failed to fetch new posts from ${fetchUrl}. Status: ${response.status}. Response: ${responseBodyText.substring(0, 500)}`);
+    throw new Error(`Failed to fetch new posts: ${response.status} ${response.statusText}. URL: ${fetchUrl}. Server/Proxy response: ${responseBodyText.substring(0, 200)}`);
+  }
+
+  let data: { posts: DvachPost[], result: number, unique_posters: number };
+  try {
+    data = JSON.parse(responseBodyText);
+    if (data.posts && Array.isArray(data.posts)) {
+        return data.posts.map((post: any): DvachPost => ({
+            ...post,
+            num: String(post.num),
+            parent: String(post.parent),
+        }));
+    }
+    return [];
+  } catch (jsonError) {
+    console.error(`[dvachService/getNewPosts] Failed to parse JSON response from ${fetchUrl}. Error:`, jsonError, "Response text:", responseBodyText.substring(0, 500));
+    throw new Error(`Invalid JSON response from ${fetchUrl}. Details: ${responseBodyText.substring(0, 200)}`);
+  }
+}
+
+export async function getThreads(
+  board: string,
+  userAgent: string = DEFAULT_USER_AGENT
+): Promise<DvachPost[]> {
+  if (!board) {
+    throw new Error("Board is required for getThreads.");
+  }
+
+  const fetchUrl = `/api/threads?board=${encodeURIComponent(board)}`;
+  const requestHeaders: HeadersInit = {
+    'Accept': 'application/json',
+    'X-User-Agent': userAgent
+  };
+
+  console.info(`[dvachService/getThreads] Fetching threads for board '${board}' via: ${fetchUrl} (UA: ${userAgent})`);
+
+  let response;
+  try {
+    response = await fetch(fetchUrl, { headers: requestHeaders });
+  } catch (networkError) {
+    console.error(`[dvachService/getThreads] Network error fetching ${fetchUrl}:`, networkError);
+    throw new Error(`Network error while fetching threads: ${(networkError as Error).message}. URL: ${fetchUrl}`);
+  }
+
+  const responseBodyText = await response.text();
+  if (!response.ok) {
+    console.error(`[dvachService/getThreads] Failed to fetch threads from ${fetchUrl}. Status: ${response.status}. Response: ${responseBodyText.substring(0, 500)}`);
+    throw new Error(`Failed to fetch threads: ${response.status} ${response.statusText}. URL: ${fetchUrl}. Server/Proxy response: ${responseBodyText.substring(0, 200)}`);
+  }
+
+  try {
+    const data = JSON.parse(responseBodyText);
+    if (data.threads && Array.isArray(data.threads)) {
+        return data.threads.map((thread: any): DvachPost => ({
+            ...thread,
+            num: String(thread.num),
+            parent: String(thread.parent),
+        }));
+    }
+    return [];
+  } catch (jsonError) {
+    console.error(`[dvachService/getThreads] Failed to parse JSON response from ${fetchUrl}. Error:`, jsonError, "Response text:", responseBodyText.substring(0, 500));
+    throw new Error(`Invalid JSON response from ${fetchUrl}. Details: ${responseBodyText.substring(0, 200)}`);
+  }
+}
