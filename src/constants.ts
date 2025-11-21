@@ -1,7 +1,7 @@
 // constants.ts - Store widely used, unchanging values for the application.
 import { AppSettings, SafetySettingRule } from './types'; // Correct import path
 
-export const DVACH_DOMAINS: string[] = ["https://2ch.hk", "https://2ch.life", "https://2ch.su"];
+export const DVACH_DOMAINS: string[] = ["https://2ch.su", "https://2ch.hk", "https://2ch.life"];
 
 export const PROXY_URL_CORS_ANYWHERE_OFFICIAL = "https://cors-anywhere.com/"; // User-provided
 export const PROXY_URL_X2U_KEYED_BASE = "https://go.x2u.in/proxy?email=early4@punkproof.com&apiKey=d97e1643&url="; // User-provided
@@ -80,6 +80,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   maxImagesToAnalyzePerPost: DEFAULT_MAX_IMAGES_TO_ANALYZE_PER_POST,
   analyzeVideosInTriggerPosts: false,
   geminiSafetySettings: DEFAULT_GEMINI_SAFETY_SETTINGS,
+  geminiThinkingLevel: 'high',
+  geminiMediaResolution: 'high',
 
   autonomousBotTargetBoard: "b",
   autonomousBotTargetThreadId: "",
@@ -101,8 +103,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   geminiTopK: 40,
   geminiMaxOutputTokens: 1024,
   geminiResponseMimeType: "text/plain", // Manual replies can be text/plain
-  useThinkingBudget: true,
-  geminiThinkingBudget: 0,
 
   enableRepetitivePostingMode: false,
   repetitivePostMessage: "Test post.",
