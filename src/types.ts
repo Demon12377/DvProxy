@@ -199,6 +199,8 @@ export interface AppSettings {
   maxImagesToAnalyzePerPost: number;
   analyzeVideosInTriggerPosts: boolean; // Placeholder, not fully implemented
   geminiSafetySettings: SafetySettingRule[]; 
+  geminiThinkingLevel: 'low' | 'high';
+  geminiMediaResolution: 'low' | 'medium' | 'high';
 
   // Autonomous Bot specific settings
   autonomousBotTargetBoard: string;
@@ -222,8 +224,6 @@ export interface AppSettings {
   geminiTopK: number;
   geminiMaxOutputTokens: number;
   geminiResponseMimeType: 'text/plain' | 'application/json'; // For manual replies; bot forces JSON.
-  useThinkingBudget: boolean; // For manual replies
-  geminiThinkingBudget: number; // For manual replies
 
 
   // Repetitive Posting Mode (Advanced/Botting Feature) - Kept from original, might be unused

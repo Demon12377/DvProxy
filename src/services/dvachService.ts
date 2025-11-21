@@ -88,7 +88,7 @@ export async function getThreadData(
   if (proxyModeForGET === 'vercel_serverless') {
     fetchUrl = `/api/get-thread?board=${encodeURIComponent(board)}&thread=${encodeURIComponent(threadId)}`;
     requestHeaders['X-User-Agent'] = userAgent; 
-    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.hk, UA: ${userAgent})`);
+    console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.su, UA: ${userAgent})`);
   } else {
     targetDvachUrl = `${baseDvachDomain}/${board}/res/${threadId}.json`; 
     fetchUrl = buildProxiedGetUrl(targetDvachUrl, proxyModeForGET, customProxyUrlForGET);
@@ -101,13 +101,13 @@ export async function getThreadData(
     response = await fetch(fetchUrl, { headers: requestHeaders });
   } catch (networkError) {
     console.error(`[dvachService/getThreadData] Network error fetching ${fetchUrl}:`, networkError);
-    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}`);
+    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.su)'}`);
   }
 
   const responseBodyText = await response.text();
   if (!response.ok) {
     console.error(`[dvachService/getThreadData] Failed to fetch thread ${board}/${threadId} from ${fetchUrl}. Status: ${response.status}. Response: ${responseBodyText.substring(0,500)}`);
-    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}. Server/Proxy response: ${responseBodyText.substring(0,200)}`);
+    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.su)'}. Server/Proxy response: ${responseBodyText.substring(0,200)}`);
   }
 
   let data: DvachThreadResponse;
@@ -124,7 +124,7 @@ export async function getThreadData(
 
   } catch (jsonError) {
     console.error(`[dvachService/getThreadData] Failed to parse JSON response from ${fetchUrl}. Error:`, jsonError, "Response text:", responseBodyText.substring(0, 500));
-    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.hk)'}. Details: ${responseBodyText.substring(0,200)}`);
+    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.su)'}. Details: ${responseBodyText.substring(0,200)}`);
   }
   
   const cacheEntry: CachedThread = { data, timestamp: Date.now() };
@@ -142,7 +142,7 @@ export async function loginToDvach(
   purchasedPasscode: string,
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachSessionCookies> {
-  console.info(`[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login (targets 2ch.hk, UA: ${userAgent})...`);
+  console.info(`[dvachService/loginToDvach] Attempting Dvach login via /api/dvach-login (targets 2ch.su, UA: ${userAgent})...`);
   
   let response;
   try {
@@ -193,7 +193,7 @@ export async function postWithSessionCookie(
   if (!sessionCookies.passcode_auth) {
     throw new Error("passcode_auth session cookie is missing. Cannot post. Please login.");
   }
-  console.info(`[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post (targets 2ch.hk, UA: ${userAgent}). Params:`, { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
+  console.info(`[dvachService/postWithSessionCookie] Preparing data for /api/dvach-post (targets 2ch.su, UA: ${userAgent}). Params:`, { board, threadIdForDvach, commentLength: comment.length, hasFile: !!file, parentPostNumForDvach, useSage });
   
   const formData = new FormData();
   formData.append('passcode_auth_cookie_value', sessionCookies.passcode_auth);
