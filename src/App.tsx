@@ -12,10 +12,6 @@ interface Part extends GooglePart {
   };
 }
 
-interface GenerateContentParameters extends GoogleGenerateContentParameters {
-  thinkingLevel?: 'low' | 'high';
-}
-
 import {
   AppSettings, LogEntry, DvachPost, SentMessageInfo, ProxyModeForGET,
   DvachThreadResponse,
@@ -625,7 +621,7 @@ const App: React.FC = () => {
 
     let geminiReplyText = "";
     try {
-      const requestConfig: GenerateContentParameters['config'] = {
+      const requestConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
         systemInstruction: systemInstructionForReply,
         temperature: settings.geminiTemperature, topP: settings.geminiTopP,
         topK: settings.geminiTopK, maxOutputTokens: settings.geminiMaxOutputTokens,
@@ -949,7 +945,7 @@ const runBotCycleCallback = useCallback(async () => {
                 currentUserMsgParts.push({text:currentUserMsgTxt+`\n\nInstruction: Generate a suitable reply based on the conversation history and this target post. Your response must be in JSON format: { "replyText": "your reply content here" }. Ensure the reply content itself does not include the '>>${targetPost.num}' quote, as it will be added automatically.`});
                 histForGemini.push({id:`user-dvach-${targetPost.num}`,role:'user',parts:currentUserMsgParts,timestamp:Date.now()});
 
-                const botGenConfig: GenerateContentParameters['config'] = {
+                const botGenConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
                     systemInstruction: autonomousBotSystemPrompt,
                     temperature:0.85, topK:50, topP:0.95,
                     maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
@@ -1048,7 +1044,7 @@ const runBotCycleCallback = useCallback(async () => {
                 currentUserMsgParts.push({ text: currentUserMsgTxt + `\n\nInstruction: Generate a suitable reply based on the conversation history and this target post. Your response must be in JSON format: { "replyText": "your reply content here" }. Ensure the reply content itself does not include the '>>${targetPost.num}' quote, as it will be added automatically.` });
                 histForGemini.push({ id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMsgParts, timestamp: Date.now() });
 
-                const botGenConfig: GenerateContentParameters['config'] = {
+                const botGenConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
                     systemInstruction: autonomousBotSystemPrompt,
                     temperature: 0.85, topK: 50, topP: 0.95,
                     maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
@@ -1152,7 +1148,7 @@ const runBotCycleCallback = useCallback(async () => {
                     currentUserMsgParts.push({ text: currentUserMsgTxt + `\n\nInstruction: Generate a suitable reply based on the conversation history and this target post. Your response must be in JSON format: { "replyText": "your reply content here" }. Ensure the reply content itself does not include the '>>${targetPost.num}' quote, as it will be added automatically.` });
                     histForGemini.push({ id: `user-dvach-${targetPost.num}`, role: 'user', parts: currentUserMsgParts, timestamp: Date.now() });
 
-                    const botGenConfig: GenerateContentParameters['config'] = {
+                    const botGenConfig: GoogleGenerateContentParameters['config'] & { thinkingLevel?: 'low' | 'high' } = {
                         systemInstruction: autonomousBotSystemPrompt,
                         temperature: 0.85, topK: 50, topP: 0.95,
                         maxOutputTokens: AUTONOMOUS_BOT_MAX_OUTPUT_TOKENS,
