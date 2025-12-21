@@ -52,6 +52,8 @@ const envKeyIsAvailableForDefaults = typeof process.env.API_KEY === 'string' && 
 
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
+  botOperationMode: 'observer',
+  persona: 'Intellectual/Analyst',
   board: "b",
   threadId: "",
   dvachBaseDomainIndex: 0,

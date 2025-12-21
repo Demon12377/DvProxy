@@ -167,6 +167,10 @@ export interface SafetySettingRule {
 }
 
 export interface AppSettings {
+  // New properties for v2.0
+  botOperationMode: 'observer' | 'protagonist';
+  persona: string; // The name of the selected persona
+
   // Global Dvach Settings (used by Manual Ops tab inputs primarily)
   board: string;
   threadId: string;

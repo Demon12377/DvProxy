@@ -1,6 +1,6 @@
 
-import { DvachThreadResponse, DvachPostApiResponse, DvachApiError, ProxyModeForGET, DvachSessionCookies, DvachPost } from '../types';
-import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT, PROXY_URL_CODETABS_BASE } from '../constants'; 
+import { DvachThreadResponse, DvachPostApiResponse, DvachApiError, ProxyModeForGET, DvachSessionCookies, DvachPost } from '../core/types';
+import { DEFAULT_CORS_ANYWHERE_PROXY, PROXY_URL_GO_X2U_BASE, THREAD_CACHE_DURATION_MS, DEFAULT_USER_AGENT, PROXY_URL_CODETABS_BASE } from '../config/constants';
 
 interface CachedThread {
   data: DvachThreadResponse;
@@ -49,16 +49,13 @@ export function buildProxiedGetUrl(
 }
 
 export async function getThreadData(
-  baseDvachDomain: string, 
+  baseDvachDomain: string,
   board: string, 
   threadId: string,
   proxyModeForGET: ProxyModeForGET, 
   customProxyUrlForGET?: string,
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachThreadResponse> {
-  if (!baseDvachDomain) {
-    throw new Error("Base Dvach Domain is required for getThreadData.");
-  }
   if (!board || !threadId) {
     throw new Error("Board and Thread ID are required for getThreadData.");
   }
