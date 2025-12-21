@@ -5,11 +5,9 @@ import { botEngine } from '../core/botEngine';
 
 const BotControlPanel: React.FC = () => {
   const {
-    settings,
     autonomousBotActive,
     autonomousBotStatus,
     setAutonomousBotActive,
-    updateSettings,
   } = useAppStore();
 
   const handleToggleBot = () => {

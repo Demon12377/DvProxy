@@ -130,7 +130,7 @@ export const useAppStore = create<AppState & AppActions>()(
 
         if (keyToUse) {
           try {
-            const genAI = new GoogleGenAI(keyToUse);
+            const genAI = new GoogleGenAI({ apiKey: keyToUse });
             set({ ai: genAI });
             addLog('Gemini API client initialized successfully.', 'success');
           } catch (error) {

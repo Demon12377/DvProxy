@@ -2,7 +2,7 @@ import { useAppStore } from '../store/appStore';
 import * as dvachApi from '../services/dvachApi';
 import * as geminiApi from '../services/geminiApi';
 import { DvachPost, Part } from './types';
-import { personas } from '../config/personas';
+import { GoogleGenAI } from '@google/genai';
 
 type AppStore = ReturnType<typeof useAppStore['getState']>;
 
@@ -71,15 +71,15 @@ class BotEngine {
     }
   };
 
-  private async runObserverMode(ai: AppStore['ai']) {
-    const { settings, addLog, addSentMessage, setAutonomousBotStatus } = this.store;
+  private async runObserverMode(ai: GoogleGenAI) {
+    const { settings, addLog, addSentMessage, setAutonomousBotStatus, currentDvachBaseUrl } = this.store;
     const { autonomousBotTargetBoard: board, autonomousBotTargetThreadId: threadId } = settings;
 
     addLog('Running Observer Mode cycle.', 'bot_activity');
     setAutonomousBotStatus('Observer: Fetching thread...');
 
     const threadPosts = await dvachApi.getThreadData(
-        this.store.currentDvachBaseUrl,
+        currentDvachBaseUrl,
         board,
         threadId,
         settings.proxyModeForGET,
@@ -97,15 +97,13 @@ class BotEngine {
     setAutonomousBotStatus(`Observer: Preparing reply to >>${targetPost.num}`);
 
     const conversationWindow = threadPosts.threads[0].posts.slice(-10);
-    const persona = personas.find(p => p.name === settings.persona) || personas[0];
 
     const mediaParts: Part[] = [];
     // ... vision logic ...
 
     const replyText = await geminiApi.generateReply(
-        ai!,
+        ai,
         settings,
-        persona,
         conversationWindow,
         targetPost,
         mediaParts
@@ -125,7 +123,7 @@ class BotEngine {
         settings.userAgent
     );
 
-    const newPostNum = newPost.num || newPost.thread;
+    const newPostNum = newPost.num || newPost.thread || '';
     this.ownPostIds.add(newPostNum);
     addSentMessage({
         num: newPostNum,
@@ -139,15 +137,15 @@ class BotEngine {
     addLog(`Observer: Posted reply as >>${newPostNum}`, 'bot_activity');
   }
 
-  private async runProtagonistMode(ai: AppStore['ai']) {
-    const { settings, addLog, addSentMessage, setAutonomousBotStatus } = this.store;
+  private async runProtagonistMode(ai: GoogleGenAI) {
+    const { settings, addLog, addSentMessage, setAutonomousBotStatus, currentDvachBaseUrl } = this.store;
     const { autonomousBotTargetBoard: board, autonomousBotTargetThreadId: threadId } = settings;
 
     addLog('Running Protagonist Mode cycle.', 'bot_activity');
     setAutonomousBotStatus('Protagonist: Fetching new posts...');
 
     const threadPosts = await dvachApi.getThreadData(
-        settings.dvachBaseDomain,
+        currentDvachBaseUrl,
         board,
         threadId,
         settings.proxyModeForGET,
@@ -160,8 +158,7 @@ class BotEngine {
         const opPost = allPosts.find(p => p.op === 1);
         if (opPost) {
             setAutonomousBotStatus('Protagonist: Initiating with a post to OP...');
-            const persona = personas.find(p => p.name === settings.persona) || personas[0];
-            const initialComment = await geminiApi.generateInitialPost(ai!, settings, persona, opPost);
+            const initialComment = await geminiApi.generateInitialPost(ai, settings, opPost);
 
             const newPost = await dvachApi.postWithSessionCookie(
                 this.store.dvachSessionCookies!,
@@ -173,7 +170,7 @@ class BotEngine {
                 false,
                 settings.userAgent
             );
-            const newPostNum = newPost.num || newPost.thread;
+            const newPostNum = newPost.num || newPost.thread || '';
             this.ownPostIds.add(newPostNum);
             addSentMessage({
                 num: newPostNum,
@@ -208,13 +205,11 @@ class BotEngine {
         if (replies.length >= 3) {
             setAutonomousBotStatus(`Protagonist: Aggregating ${replies.length} replies to >>${ownPostId}`);
 
-            const persona = personas.find(p => p.name === settings.persona) || personas[0];
             const originalPost = allPosts.find(p => p.num === ownPostId);
 
             const aggregatedReply = await geminiApi.generateAggregatedReply(
-                ai!,
+                ai,
                 settings,
-                persona,
                 originalPost!,
                 replies
             );
@@ -230,7 +225,7 @@ class BotEngine {
                 settings.userAgent
             );
 
-            const newPostNum = newPost.num || newPost.thread;
+            const newPostNum = newPost.num || newPost.thread || '';
             this.ownPostIds.add(newPostNum);
             addSentMessage({
                 num: newPostNum,

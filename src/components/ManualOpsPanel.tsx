@@ -3,7 +3,6 @@ import { useAppStore } from '../store/appStore';
 import * as dvachApi from '../services/dvachApi';
 import * as geminiApi from '../services/geminiApi';
 import { DvachPost } from '../core/types';
-import { personas } from '../config/personas';
 import { IconRefresh, IconSend, IconSparkles } from './Icons';
 
 const ManualOpsPanel: React.FC = () => {
@@ -52,11 +51,9 @@ const ManualOpsPanel: React.FC = () => {
     }
     setIsGenerating(true);
     try {
-      const persona = personas.find(p => p.name === settings.persona) || personas[0];
       const reply = await geminiApi.generateReply(
         ai,
         settings,
-        persona,
         currentFetchedDvachPosts,
         post,
         []
@@ -81,7 +78,7 @@ const ManualOpsPanel: React.FC = () => {
         false, // sage
         settings.userAgent
       );
-      const newPostNum = newPost.num || newPost.thread;
+      const newPostNum = newPost.num || newPost.thread || '';
       addSentMessage({
         num: newPostNum,
         timestamp: Date.now(),

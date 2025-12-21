@@ -1,5 +1,5 @@
 // constants.ts - Store widely used, unchanging values for the application.
-import { AppSettings, SafetySettingRule } from './types'; // Correct import path
+import { AppSettings, SafetySettingRule } from '../core/types';
 
 export const DVACH_DOMAINS: string[] = ["https://2ch.su", "https://2ch.hk", "https://2ch.life"];
 

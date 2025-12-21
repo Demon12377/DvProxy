@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as ActualGenerateContentResponse, FinishReason as SDKFinishReason } from "@google/genai";
+export type { Part };
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
