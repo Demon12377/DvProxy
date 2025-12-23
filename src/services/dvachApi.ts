@@ -79,18 +79,25 @@ export async function getThreadData(
   }
 
   let fetchUrl: string;
-  let targetDvachUrl: string | undefined; 
   const requestHeaders: HeadersInit = { 'Accept': 'application/json' };
+  let originalTargetUrl: string | undefined;
 
   if (proxyModeForGET === 'vercel_serverless') {
     fetchUrl = `/api/get-thread?board=${encodeURIComponent(board)}&thread=${encodeURIComponent(threadId)}`;
     requestHeaders['X-User-Agent'] = userAgent; 
     console.info(`[dvachService/getThreadData] Fetching thread via Vercel Serverless: ${fetchUrl} (Serverless function targets 2ch.su, UA: ${userAgent})`);
   } else {
-    targetDvachUrl = `${baseDvachDomain}/${board}/res/${threadId}.json`; 
-    fetchUrl = buildProxiedGetUrl(targetDvachUrl, proxyModeForGET, customProxyUrlForGET);
+    originalTargetUrl = `${baseDvachDomain}/${board}/res/${threadId}.json`;
+    let finalTargetUrl = originalTargetUrl;
+
+    if (import.meta.env.DEV) {
+        const url = new URL(originalTargetUrl);
+        finalTargetUrl = `/2ch${url.pathname}${url.search}`;
+    }
+
+    fetchUrl = buildProxiedGetUrl(finalTargetUrl, proxyModeForGET, customProxyUrlForGET);
     requestHeaders['User-Agent'] = userAgent; 
-    console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetDvachUrl}, UA: ${userAgent})`);
+    console.info(`[dvachService/getThreadData] Fetching thread. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${originalTargetUrl}, UA: ${userAgent})`);
   }
   
   let response;
@@ -98,7 +105,7 @@ export async function getThreadData(
     response = await fetch(fetchUrl, { headers: requestHeaders });
   } catch (networkError) {
     console.error(`[dvachService/getThreadData] Network error fetching ${fetchUrl}:`, networkError);
-    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.su)'}`);
+    throw new Error(`Network error while fetching thread: ${(networkError as Error).message}. URL: ${fetchUrl}, Target API: ${originalTargetUrl || 'N/A (Serverless always targets 2ch.su)'}`);
   }
 
   const responseBodyText = await response.text();
@@ -313,6 +320,9 @@ export async function base64ToFile(base64: string, filename: string, mimeType: s
 }
 
 export async function getNewPosts(
+  baseDvachDomain: string,
+  proxyModeForGET: ProxyModeForGET,
+  customProxyUrlForGET: string | undefined,
   board: string,
   threadId: string,
   lastPostNum: string,
@@ -322,13 +332,22 @@ export async function getNewPosts(
     throw new Error("Board, Thread ID, and Last Post Number are required for getNewPosts.");
   }
 
-  const fetchUrl = `/api/mobile/v2/after/${board}/${threadId}/${lastPostNum}`;
+  const originalTargetUrl = `${baseDvachDomain}/mobile/v2/after/${board}/${threadId}/${lastPostNum}`;
+  let finalTargetUrl = originalTargetUrl;
+
+  if (import.meta.env.DEV) {
+      const url = new URL(originalTargetUrl);
+      finalTargetUrl = `/2ch${url.pathname}${url.search}`;
+  }
+
+  const fetchUrl = buildProxiedGetUrl(finalTargetUrl, proxyModeForGET, customProxyUrlForGET);
+
   const requestHeaders: HeadersInit = {
     'Accept': 'application/json',
     'X-User-Agent': userAgent
   };
 
-  console.info(`[dvachService/getNewPosts] Fetching new posts via: ${fetchUrl} (UA: ${userAgent})`);
+  console.info(`[dvachService/getNewPosts] Fetching new posts. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetUrl}, UA: ${userAgent})`);
 
   let response;
   try {
@@ -346,9 +365,9 @@ export async function getNewPosts(
 
   let data: { posts: DvachPost[], result: number, unique_posters: number };
   try {
-    data = JSON.parse(responseBodyText);
-    if (data.posts && Array.isArray(data.posts)) {
-        return data.posts.map((post: any): DvachPost => ({
+    const rawData = JSON.parse(responseBodyText);
+    if (rawData.posts && Array.isArray(rawData.posts)) {
+        return rawData.posts.map((post: any): DvachPost => ({
             ...post,
             num: String(post.num),
             parent: String(post.parent),
@@ -362,6 +381,9 @@ export async function getNewPosts(
 }
 
 export async function getThreads(
+  baseDvachDomain: string,
+  proxyModeForGET: ProxyModeForGET,
+  customProxyUrlForGET: string | undefined,
   board: string,
   userAgent: string = DEFAULT_USER_AGENT
 ): Promise<DvachPost[]> {
@@ -369,13 +391,22 @@ export async function getThreads(
     throw new Error("Board is required for getThreads.");
   }
 
-  const fetchUrl = `/api/threads?board=${encodeURIComponent(board)}`;
+  const originalTargetUrl = `${baseDvachDomain}/${board}/threads.json`;
+  let finalTargetUrl = originalTargetUrl;
+
+  if (import.meta.env.DEV) {
+      const url = new URL(originalTargetUrl);
+      finalTargetUrl = `/2ch${url.pathname}${url.search}`;
+  }
+
+  const fetchUrl = buildProxiedGetUrl(finalTargetUrl, proxyModeForGET, customProxyUrlForGET);
+
   const requestHeaders: HeadersInit = {
     'Accept': 'application/json',
     'X-User-Agent': userAgent
   };
 
-  console.info(`[dvachService/getThreads] Fetching threads for board '${board}' via: ${fetchUrl} (UA: ${userAgent})`);
+  console.info(`[dvachService/getThreads] Fetching threads for board '${board}'. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetUrl}, UA: ${userAgent})`);
 
   let response;
   try {

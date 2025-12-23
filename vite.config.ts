@@ -19,7 +19,12 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: env.VITE_DEV_PROXY_TARGET || 'http://localhost:3000',
           changeOrigin: true,
-        }
+        },
+        '/2ch': {
+          target: 'https://2ch.hk',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/2ch/, ''),
+        },
       }
     },
     build: {
