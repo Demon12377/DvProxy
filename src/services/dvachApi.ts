@@ -111,7 +111,7 @@ export async function getThreadData(
   const responseBodyText = await response.text();
   if (!response.ok) {
     console.error(`[dvachService/getThreadData] Failed to fetch thread ${board}/${threadId} from ${fetchUrl}. Status: ${response.status}. Response: ${responseBodyText.substring(0,500)}`);
-    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.su)'}. Server/Proxy response: ${responseBodyText.substring(0,200)}`);
+    throw new Error(`Failed to fetch thread: ${response.status} ${response.statusText}. URL: ${fetchUrl}, Target API: ${originalTargetUrl || 'N/A (Serverless always targets 2ch.su)'}. Server/Proxy response: ${responseBodyText.substring(0,200)}`);
   }
 
   let data: DvachThreadResponse;
@@ -128,7 +128,7 @@ export async function getThreadData(
 
   } catch (jsonError) {
     console.error(`[dvachService/getThreadData] Failed to parse JSON response from ${fetchUrl}. Error:`, jsonError, "Response text:", responseBodyText.substring(0, 500));
-    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${targetDvachUrl || 'N/A (Serverless always targets 2ch.su)'}. Details: ${responseBodyText.substring(0,200)}`);
+    throw new Error(`Invalid JSON response from ${fetchUrl}. Check proxy or API. Target: ${originalTargetUrl || 'N/A (Serverless always targets 2ch.su)'}. Details: ${responseBodyText.substring(0,200)}`);
   }
   
   const cacheEntry: CachedThread = { data, timestamp: Date.now() };
@@ -347,7 +347,7 @@ export async function getNewPosts(
     'X-User-Agent': userAgent
   };
 
-  console.info(`[dvachService/getNewPosts] Fetching new posts. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetUrl}, UA: ${userAgent})`);
+  console.info(`[dvachService/getNewPosts] Fetching new posts. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${originalTargetUrl}, UA: ${userAgent})`);
 
   let response;
   try {
@@ -363,7 +363,6 @@ export async function getNewPosts(
     throw new Error(`Failed to fetch new posts: ${response.status} ${response.statusText}. URL: ${fetchUrl}. Server/Proxy response: ${responseBodyText.substring(0, 200)}`);
   }
 
-  let data: { posts: DvachPost[], result: number, unique_posters: number };
   try {
     const rawData = JSON.parse(responseBodyText);
     if (rawData.posts && Array.isArray(rawData.posts)) {
@@ -406,7 +405,7 @@ export async function getThreads(
     'X-User-Agent': userAgent
   };
 
-  console.info(`[dvachService/getThreads] Fetching threads for board '${board}'. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${targetUrl}, UA: ${userAgent})`);
+  console.info(`[dvachService/getThreads] Fetching threads for board '${board}'. Mode: ${proxyModeForGET}. URL: ${fetchUrl} (target Dvach API: ${originalTargetUrl}, UA: ${userAgent})`);
 
   let response;
   try {
