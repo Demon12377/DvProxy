@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { Chat as GeminiChatInstanceTypeSDK, Part, GenerateContentResponse as ActualGenerateContentResponse, FinishReason as SDKFinishReason } from "@google/genai";
+export type { Part };
 
 // Dvach API Types (aligned with OpenAPI spec where possible)
 export interface DvachFile {
@@ -167,6 +168,10 @@ export interface SafetySettingRule {
 }
 
 export interface AppSettings {
+  // New properties for v2.0
+  botOperationMode: 'observer' | 'protagonist';
+  persona: string; // The name of the selected persona
+
   // Global Dvach Settings (used by Manual Ops tab inputs primarily)
   board: string;
   threadId: string;
